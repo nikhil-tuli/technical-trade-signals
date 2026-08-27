@@ -13,7 +13,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-from config import NIFTY_100_MAP, NIFTY_500_MAP, TRADE_TYPE_PARAMS, DEFAULT_TRADE_TYPE, VOLUME_MA_PERIOD_DEFAULT, MIN_RR_DEFAULT, SR_MAX_DISTANCE_PCT_DEFAULT, MAX_CUSTOM_TICKERS
+from config import NIFTY_100_MAP, NIFTY_500_MAP, TRADE_TYPE_PARAMS, DEFAULT_TRADE_TYPE, VOLUME_MA_PERIOD_DEFAULT, MIN_RR_DEFAULT, SR_MAX_DISTANCE_PCT_DEFAULT, MAX_CUSTOM_TICKERS, STALE_DATA_MAX_HOURS
 from data_fetch import fetch_universe
 from signal_engine import run_screen
 
@@ -257,69 +257,106 @@ def _render_page():
             progress_bar.progress(done / total, text=f"Fetching data — {done} / {total} symbols ({sym})")
 
         universe_data, fetch_failures = fetch_universe(list(symbols), period=period, progress_callback=_progress)
+        data_timestamp = {sym: dt.datetime.now() for sym in universe_data}
         fetched_at = dt.datetime.now()
         progress_bar.empty()
     else:
-        cache_key = f"universe_data::{universe_label}::{period}"
+        # Persistent per-symbol store (survives across TTL cycles, unlike
+        # the old design which fully replaced the cache entry on every
+        # miss). Each symbol keeps its own {"df", "fetched_at"} — this is
+        # what makes the 24-hour stale-data fallback possible: a symbol
+        # that fails a live fetch can still use its own last-known-good
+        # data as long as that data isn't older than
+        # STALE_DATA_MAX_HOURS, independent of whatever happened to any
+        # other symbol in the same run.
+        store_key = f"per_symbol::{universe_label}::{period}"
+        attempt_key = f"last_attempt::{universe_label}::{period}"
+        store = _SHARED_CACHE.setdefault(store_key, {})
+        now = dt.datetime.now()
 
-        cached_entry = _SHARED_CACHE.get(cache_key)
-        cache_valid = (
-            cached_entry is not None
-            and (dt.datetime.now() - cached_entry["fetched_at"]).total_seconds() < CACHE_TTL_SECONDS
-        )
+        last_attempt = _SHARED_CACHE.get(attempt_key)
+        batch_fresh = last_attempt is not None and (now - last_attempt).total_seconds() < CACHE_TTL_SECONDS
 
-        if cache_valid:
-            with st.spinner("Loading cached data…"):
-                universe_data = dict(cached_entry["data"])
-                cached_failures = dict(cached_entry.get("failures", {}))
-            fetched_at = cached_entry["fetched_at"]
-
-            # Cache stores successes AND failures together, but a failure
-            # (timeout, transient network issue) is not necessarily still
-            # failing a minute later — only the successful fetches are
-            # genuinely "cacheable" data; a prior failure means we simply
-            # don't have that symbol's data yet, and every subsequent
-            # click should keep trying for it rather than treating it as
-            # a settled, cache-worthy result for the rest of the TTL
-            # window.
-            if cached_failures:
-                retry_symbols = list(cached_failures.keys())
-                retry_progress = st.progress(0, text=f"Retrying {len(retry_symbols)} previously failed symbol(s)…")
-
-                def _retry_progress(done, total, sym):
-                    retry_progress.progress(done / total, text=f"Retrying {done} / {total} previously failed symbol(s) ({sym})")
-
-                retried_data, retried_failures = fetch_universe(retry_symbols, period=period, progress_callback=_retry_progress)
-                retry_progress.empty()
-                universe_data.update(retried_data)
-                fetch_failures = retried_failures  # only symbols still failing after retry
-                # Update the shared cache in place so other users within
-                # this TTL window benefit from the retry too, without
-                # resetting the TTL clock (fetched_at unchanged) — this
-                # isn't a fresh fetch of everything, just a correction of
-                # what was previously known to be incomplete.
-                _SHARED_CACHE[cache_key] = {
-                    "data": universe_data, "fetched_at": fetched_at, "failures": fetch_failures,
-                }
-            else:
-                fetch_failures = {}
+        if batch_fresh:
+            # Within the normal refresh window — only symbols with no
+            # usable entry at all need a live attempt (mirrors the earlier
+            # "retry failures on cache hit" behavior; symbols already
+            # serving fine this cycle are left alone).
+            to_fetch = [s for s in symbols if s not in store]
         else:
+            # Full refresh cycle.
+            to_fetch = list(symbols)
+            _SHARED_CACHE[attempt_key] = now
+
+        if to_fetch:
             progress_bar = st.progress(0, text="Starting fetch…")
 
             def _progress(done, total, sym):
                 progress_bar.progress(done / total, text=f"Fetching data — {done} / {total} symbols ({sym})")
 
-            universe_data, fetch_failures = fetch_universe(list(symbols), period=period, progress_callback=_progress)
-            fetched_at = dt.datetime.now()
-            _SHARED_CACHE[cache_key] = {"data": universe_data, "fetched_at": fetched_at, "failures": fetch_failures}
+            live_data, live_failures = fetch_universe(to_fetch, period=period, progress_callback=_progress)
             progress_bar.empty()
+            for sym, df in live_data.items():
+                store[sym] = {"df": df, "fetched_at": now}
+            # Symbols still failing live keep whatever old store entry
+            # they had (if any) — untouched here, resolved below by the
+            # 24-hour age check, exactly like any other cached entry.
+        else:
+            live_failures = {}
+
+        universe_data, data_timestamp, fetch_failures = {}, {}, {}
+        stale_max_seconds = STALE_DATA_MAX_HOURS * 3600
+        for sym in symbols:
+            entry = store.get(sym)
+            if entry is not None and (now - entry["fetched_at"]).total_seconds() < stale_max_seconds:
+                universe_data[sym] = entry["df"]
+                data_timestamp[sym] = entry["fetched_at"]
+            else:
+                fetch_failures[sym] = live_failures.get(
+                    sym, f"No data available (fetch failed, nothing cached within {STALE_DATA_MAX_HOURS}h)"
+                )
+                if entry is not None:
+                    del store[sym]  # past the 24h ceiling — evict, no longer usable even as fallback
+
+        fetched_at = last_attempt or now
 
     def _ordinal_date(d: dt.datetime) -> str:
         day = d.day
         suffix = "th" if 11 <= day % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
         return f"{day}{suffix} {d.strftime('%b %H:%M')} IST"
 
+    # Signals built from data older than this run's fetch attempt are
+    # "stale" (served via the 24h fallback, not this cycle's live fetch).
+    # ~1 min slack absorbs normal processing time so freshly-fetched data
+    # isn't mislabeled stale due to timing noise.
+    stale_symbols = {
+        sym for sym, ts in data_timestamp.items()
+        if (fetched_at - ts).total_seconds() > 60
+    }
+
+    # --- Screen (moved ahead of the failures/stale UI blocks so the
+    # status line below — which needs signal/exclusion counts — can
+    # render BEFORE the failures expander, per the requested ordering) ---
+    with st.spinner("Evaluating signals…"):
+        signals, exclusions = run_screen(
+            universe_data, company_map, trade_type, volume_ma_period, min_rr, max_sr_distance_pct,
+            data_timestamp=data_timestamp,
+        )
+
+    # One compact status line instead of three separate ones (fetch info,
+    # screened/signal/excluded counts) — reduces stacked "meta" elements
+    # a trader has to read past before reaching the actual signals. Counts
+    # here are the hard-gate result (all 4 checks passed) — Pattern/Search
+    # below only narrow what's DISPLAYED, they don't change what "matched".
+    total_screened = len(universe_data)
     failures = fetch_failures
+    st.caption(
+        f"{universe_label} · Updated {_ordinal_date(fetched_at)} · "
+        f"{total_screened} screened → **{len(signals)} signal{'s' if len(signals) != 1 else ''}**, "
+        f"{len(exclusions)} excluded"
+        + (f" · {len(failures)} fetch failures" if failures else "")
+    )
+
     if failures:
         with st.expander(f"⚠️ {len(failures)} symbols failed to fetch — click for details"):
             st.dataframe(
@@ -330,28 +367,15 @@ def _render_page():
             st.error("All symbol fetches failed — check the error details above before trusting a '0 signals' result.")
             return
 
-    # --- Screen ---
-    with st.spinner("Evaluating signals…"):
-        signals, exclusions = run_screen(universe_data, company_map, trade_type, volume_ma_period, min_rr, max_sr_distance_pct)
-
-    # One compact status line instead of three separate ones (fetch info,
-    # screened/signal/excluded counts) — reduces stacked "meta" elements
-    # a trader has to read past before reaching the actual signals. Counts
-    # here are the hard-gate result (all 4 checks passed) — Pattern/Search
-    # below only narrow what's DISPLAYED, they don't change what "matched".
-    total_screened = len(universe_data)
-    st.caption(
-        f"{universe_label} · Updated {_ordinal_date(fetched_at)} · "
-        f"{total_screened} screened → **{len(signals)} signal{'s' if len(signals) != 1 else ''}**, "
-        f"{len(exclusions)} excluded"
-        + (f" · {len(failures)} fetch failures" if failures else "")
-    )
+    if stale_symbols:
+        st.info(
+            f"⏱ {len(stale_symbols)} symbol(s) are using cached data from earlier (up to "
+            f"{STALE_DATA_MAX_HOURS}h old) because today's live fetch failed for them — marked "
+            f"**Stale** in the table below."
+        )
 
     # Breakdown only shown when there's actually something to explain —
     # an empty "See breakdown" box (e.g. 0 excluded) is pure clutter.
-    # Note: no longer search-filterable — Search now renders further down
-    # (below the Signals heading), so it isn't defined yet at this point
-    # in the script. Minor trade-off for the cleaner layout below.
     if exclusions:
         with st.expander("Why were stocks excluded?"):
             rollup = {}
@@ -376,45 +400,21 @@ def _render_page():
         "RSI/MACD/Supertrend/Aroon agree — additional context, not a filter."
     )
 
-    # Pattern/Search live here (not in the input panel above, and not
-    # above the heading) because they filter the results already
-    # generated — no re-screen needed — and narrow the VIEW below, not
-    # the "matched" count above.
-    f1, f2 = st.columns(2)
-    with f1:
-        _pf_options = ["All patterns", "Bullish only", "Bearish only"]
-        _pf_default = st.session_state.get("stored_pattern_filter", _pf_options[0])
-        pattern_filter = st.selectbox(
-            "Pattern types", _pf_options,
-            index=_pf_options.index(_pf_default),
-            key="pattern_filter_select"
-        )
-        st.session_state["stored_pattern_filter"] = pattern_filter
-    with f2:
-        search = st.text_input(
-            "Search Symbol / Company",
-            value=st.session_state.get("stored_search", ""),
-            key="search_input"
-        )
-        st.session_state["stored_search"] = search
-
+    # Pattern Types / Search filters removed for now — with only a
+    # handful of signals typically shown, a filter row added more UI than
+    # it saved. Worth reinstating if signal counts grow meaningfully
+    # higher (rule of thumb: more than ~10 rows routinely).
     view_signals = signals
-    if pattern_filter == "Bullish only":
-        view_signals = [s for s in view_signals if s.direction == "bullish"]
-    elif pattern_filter == "Bearish only":
-        view_signals = [s for s in view_signals if s.direction == "bearish"]
-    if search:
-        s_up = search.upper()
-        view_signals = [s for s in view_signals if s_up in s.symbol.upper() or s_up in s.company.upper()]
 
     if not view_signals:
-        st.info("No signals match the current Pattern/Search filter.")
+        st.info("No active signals match the current filters.")
         return
 
     rows = []
     for s in view_signals:
+        stale_tag = " ⏱ Stale" if s.symbol in stale_symbols else ""
         rows.append({
-            "Symbol": f"{s.symbol} — {s.pattern} ({s.formation_date.strftime('%d %b')})",
+            "Symbol": f"{s.symbol} — {s.pattern} ({s.formation_date.strftime('%d %b')}){stale_tag}",
             "Direction": "Bullish" if s.direction == "bullish" else "Bearish",
             "Trade Levels": f"Entry ₹{s.entry} · SL ₹{s.stop_loss} · Target ₹{s.target} ({s.rr}x)",
             "Primary Trend": s.primary_trend["trend"],
@@ -447,124 +447,134 @@ def _render_page():
         m3.metric("Target", f"₹{sig.target}")
         m4.metric("Reward:Risk", f"{sig.rr}x")
 
+        data_as_of = d.get("data_as_of")
+        if data_as_of is not None:
+            is_stale_sig = sig.symbol in stale_symbols
+            stale_note = f" — ⏱ **Stale**, live fetch failed today; showing last known data (up to {STALE_DATA_MAX_HOURS}h old)" if is_stale_sig else ""
+            st.caption(f"Data as of **{_ordinal_date(data_as_of)}**{stale_note}")
+
         st.caption(
             f"Signal formed on **{sig.formation_date.strftime('%d %b %Y')}**, still **Active** — "
             f"price hasn't closed beyond the stop-loss (₹{sig.stop_loss}) or target (₹{sig.target}) since."
         )
 
-        # --- Why this pattern qualified ---
-        st.markdown("**Why this pattern qualified**")
-
         trade_type_label_d = "Short-term" if d.get("trade_type") == "short_term" else "Long-term"
-        st.write(
-            f"- **Candlestick pattern:** {sig.pattern}, detected on the {sig.formation_date.strftime('%d %b %Y')} "
-            f"candle — checked over the last **{d.get('prior_trend_lookback', '—')} candles** "
-            f"({trade_type_label_d} mode)"
-        )
-
-        ptd = d.get("prior_trend_dates")
-        if ptd:
-            st.write(
-                f"- **Required prior trend:** {d.get('prior_trend_required', '—')} — confirmed from "
-                f"**{ptd['start'].strftime('%d %b')} to {ptd['end'].strftime('%d %b %Y')}** "
-                f"(**{ptd['days']} trading days**)"
-            )
-        # else: pattern has no prior-trend requirement (e.g. Marubozu) — nothing shown, per spec
 
         vol_today = d.get("volume_today")
         vol_ma = d.get("volume_ma")
         vol_ratio = d.get("volume_ratio")
         vol_ma_period = d.get("volume_ma_period")
-        st.write(
-            f"- **Volume:** signal-day volume was **{vol_today:,.0f}** shares, its "
-            f"**{vol_ma:,.0f}**-share **{vol_ma_period}-day** moving average — **{vol_ratio}x** the average"
-            if vol_today is not None else "- Volume: data unavailable"
-        )
-
-        # --- Support & Resistance ---
-        st.markdown("**Support & Resistance**")
-
-        st.write(f"- **Entry:** ₹{sig.entry}, considered on **{sig.formation_date.strftime('%d %b %Y')}**")
 
         sl_raw = d.get("sl_raw")
         buf = d.get("sl_buffer_pct")
-        st.write(
-            f"- **Stop-loss calculation:** raw candle "
-            f"{'low' if sig.direction == 'bullish' else 'high'} of ₹{sl_raw}, "
-            f"{'reduced' if sig.direction == 'bullish' else 'increased'} by a **{buf}%** buffer → "
-            f"final stop-loss **₹{sig.stop_loss}**"
-        )
-
         val_lower = d.get("sr_validation_zone_lower")
         val_upper = d.get("sr_validation_zone_upper")
         val_touches = d.get("sr_validation_zone_touches")
         val_dist = d.get("sr_validation_distance_pct")
         val_max_dist = d.get("max_sr_distance_threshold")
         val_last_touch = d.get("sr_validation_last_touch")
-        st.write(
-            f"- **Nearest {'support' if sig.direction == 'bullish' else 'resistance'} zone used to validate "
-            f"the stop-loss:** ₹{val_lower}–₹{val_upper} band (**{val_touches} touches**, most recently on "
-            f"**{val_last_touch.strftime('%d %b %Y') if val_last_touch is not None else '—'}**) — "
-            f"**{val_dist}%** away from the stop-loss (max allowed: **{val_max_dist}%**)"
-        )
-
         tgt_lower = d.get("sr_target_zone_lower")
         tgt_upper = d.get("sr_target_zone_upper")
         tgt_touches = d.get("sr_target_zone_touches")
         tgt_last_touch = d.get("sr_target_last_touch")
         near_edge_label = "lower" if sig.direction == "bullish" else "upper"
-        st.write(
-            f"- **Target calculation:** nearest {'resistance' if sig.direction == 'bullish' else 'support'} "
-            f"zone ₹{tgt_lower}–₹{tgt_upper} band (**{tgt_touches} touches**, most recently on "
-            f"**{tgt_last_touch.strftime('%d %b %Y') if tgt_last_touch is not None else '—'}**) — target set "
-            f"at its **near ({near_edge_label}) edge, ₹{sig.target}**"
-        )
 
-        # --- Reward:Risk ---
-        st.markdown("**Reward:Risk**")
         reward = abs(sig.target - sig.entry)
         risk = abs(sig.entry - sig.stop_loss)
         min_rr_threshold = d.get("min_rr_threshold")
-        st.write(
-            f"- **R:R = {sig.rr}x** (minimum required: **{min_rr_threshold}x**) — calculated as "
+
+        # Explicitly organized under the 4 hard gates (matches "How This
+        # Works") so a trader can directly relate each line to the check
+        # it satisfies. Each gate's lines are one combined st.markdown
+        # block (not separate st.write calls) to avoid the extra vertical
+        # margin Streamlit adds between separate block elements.
+        st.markdown("**Why this pattern qualified**")
+
+        gate1_lines = [
+            f"**Gate 1 — Candlestick Pattern:** {sig.pattern}, detected on the "
+            f"{sig.formation_date.strftime('%d %b %Y')} candle — checked over the last "
+            f"**{d.get('prior_trend_lookback', '—')} candles** ({trade_type_label_d} mode)",
+        ]
+        ptd = d.get("prior_trend_dates")
+        if ptd:
+            gate1_lines.append(
+                f"Required prior trend: {d.get('prior_trend_required', '—')} — confirmed from "
+                f"**{ptd['start'].strftime('%d %b')} to {ptd['end'].strftime('%d %b %Y')}** "
+                f"(**{ptd['days']} trading days**)"
+            )
+        st.markdown("  \n".join(f"- {l}" for l in gate1_lines))
+
+        gate2_line = (
+            f"**Gate 2 — Volume:** {vol_ratio}x the {vol_ma_period}-day simple moving average — "
+            f"signal-day volume is **{vol_today:,.0f}** shares, {vol_ma_period}-day moving average is "
+            f"**{vol_ma:,.0f}**"
+            if vol_today is not None else "**Gate 2 — Volume:** data unavailable"
+        )
+        st.markdown(f"- {gate2_line}")
+
+        gate3_summary = (
+            f"**Gate 3 — Support & Resistance:** Stop-loss was **{val_dist}%** away from the nearest "
+            f"{'support' if sig.direction == 'bullish' else 'resistance'} zone (max allowed: **{val_max_dist}%**)"
+        )
+        gate3_sublines = [
+            f"Entry: ₹{sig.entry} considered on **{sig.formation_date.strftime('%d %b %Y')}**",
+            f"Stop-loss: raw candle {'low' if sig.direction == 'bullish' else 'high'} of ₹{sl_raw}, "
+            f"{'reduced' if sig.direction == 'bullish' else 'increased'} by a **{buf}%** buffer → "
+            f"final stop-loss **₹{sig.stop_loss}**",
+            f"Nearest {'support' if sig.direction == 'bullish' else 'resistance'} zone validating the "
+            f"stop-loss: ₹{val_lower}–₹{val_upper} band (**{val_touches} touches**, most recently "
+            f"**{val_last_touch.strftime('%d %b %Y') if val_last_touch is not None else '—'}**) — "
+            f"**{val_dist}%** away from stop-loss (max allowed: **{val_max_dist}%**)",
+            f"Target: nearest {'resistance' if sig.direction == 'bullish' else 'support'} zone "
+            f"₹{tgt_lower}–₹{tgt_upper} band (**{tgt_touches} touches**, most recently "
+            f"**{tgt_last_touch.strftime('%d %b %Y') if tgt_last_touch is not None else '—'}**) — "
+            f"near ({near_edge_label}) edge used, **₹{sig.target}**",
+        ]
+        gate3_lines = [f"- {gate3_summary}"] + [f"  - {l}" for l in gate3_sublines]
+        st.markdown("  \n".join(gate3_lines))
+
+        gate4_line = (
+            f"**Gate 4 — Reward:Risk:** {sig.rr}x (minimum required: **{min_rr_threshold}x**) — "
             f"(Target − Entry) / (Entry − Stop-loss) = "
             f"(₹{sig.target} − ₹{sig.entry}) / (₹{sig.entry} − ₹{sig.stop_loss}) = "
             f"₹{reward:.2f} / ₹{risk:.2f} = **{sig.rr}x**"
         )
+        st.markdown(f"- {gate4_line}")
 
-        # --- Primary Trend ---
-        st.markdown("**Primary Trend**")
+        # --- Primary Trend (context, not a gate) ---
         pt = sig.primary_trend
         trend_label = pt.get("trend", "—")
         ma_period = pt.get("ma_period", "—")
         ma_value = pt.get("ma_value", "—")
         close_now = pt.get("close_now", "—")
-        slope = pt.get("slope", "—")
         ma_then = pt.get("ma_then", "—")
         slope_days = pt.get("slope_lookback_days", "—")
         flip_count = pt.get("flip_count", "—")
         flip_window = pt.get("sideways_flip_window", "—")
 
         if trend_label == "Up":
-            st.write(
-                f"- **Up** — price (₹{close_now}) is above the {ma_period}-day moving average (₹{ma_value}), "
+            trend_line = (
+                f"**Up** — price (₹{close_now}) is above the {ma_period}-day moving average (₹{ma_value}), "
                 f"and that average has **risen** from ₹{ma_then} over the last {slope_days} days"
             )
         elif trend_label == "Down":
-            st.write(
-                f"- **Down** — price (₹{close_now}) is below the {ma_period}-day moving average (₹{ma_value}), "
+            trend_line = (
+                f"**Down** — price (₹{close_now}) is below the {ma_period}-day moving average (₹{ma_value}), "
                 f"and that average has **fallen** from ₹{ma_then} over the last {slope_days} days"
             )
         elif trend_label == "Sideways":
-            st.write(
-                f"- **Sideways** — price has crossed back and forth over the {ma_period}-day moving average "
+            trend_line = (
+                f"**Sideways** — price has crossed back and forth over the {ma_period}-day moving average "
                 f"(currently ₹{ma_value}) **{flip_count} times** in the last {flip_window} candles, "
                 f"with no clear direction"
             )
         else:
-            st.write(f"- **{trend_label}** — not enough price history yet to determine trend")
+            trend_line = f"**{trend_label}** — not enough price history yet to determine trend"
 
-        st.markdown("**TA Indicators (context, not a filter)**")
+        st.markdown("**Primary Trend**")
+        st.markdown(f"- {trend_line}")
+
+        st.markdown("**TA Indicators**")
         cv = sig.confluence["raw_values"]
         i1, i2, i3, i4 = st.columns(4)
         i1.metric("RSI", cv.get("RSI", "—"))

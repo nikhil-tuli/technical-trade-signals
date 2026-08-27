@@ -65,12 +65,17 @@ def _compute_rr(entry: float, stop: float, target: float, direction: str) -> flo
 def screen_symbol(symbol: str, company: str, df: pd.DataFrame, trade_type: str,
                    volume_ma_period: int = VOLUME_MA_PERIOD_DEFAULT,
                    min_rr: float = MIN_RR_DEFAULT,
-                   max_sr_distance_pct: float = SR_MAX_DISTANCE_PCT_DEFAULT) -> tuple[list[Signal], list[str]]:
+                   max_sr_distance_pct: float = SR_MAX_DISTANCE_PCT_DEFAULT,
+                   data_as_of=None) -> tuple[list[Signal], list[str]]:
     """
     Run all 4 gates for one symbol across the live-scan lookback window
     (Section 5: last SIGNAL_SCAN_LOOKBACK_DAYS trading days).
     Returns (list of qualifying Signals [possibly empty], list of
     aggregated failure reasons for this symbol across the scan).
+
+    data_as_of: when this symbol's OHLCV data was actually fetched
+    (datetime or None) — carried through to Signal.details so the UI can
+    show data freshness / flag stale fallback data (Section on 24h fallback).
     """
     params = TRADE_TYPE_PARAMS[trade_type]
     signals: list[Signal] = []
@@ -177,6 +182,7 @@ def screen_symbol(symbol: str, company: str, df: pd.DataFrame, trade_type: str,
                 details={
                     "candle": match.detail,
                     "trade_type": trade_type,
+                    "data_as_of": data_as_of,
                     "prior_trend_lookback": prior_lookback,
                     "prior_trend_required": match.prior_trend_required,
                     "prior_trend_dates": prior_trend_dates,
@@ -229,18 +235,25 @@ def _resolve_status(df: pd.DataFrame, formed_idx: int, stop: float, target: floa
 def run_screen(universe: dict[str, pd.DataFrame], company_map: dict[str, str], trade_type: str,
                volume_ma_period: int = VOLUME_MA_PERIOD_DEFAULT,
                min_rr: float = MIN_RR_DEFAULT,
-               max_sr_distance_pct: float = SR_MAX_DISTANCE_PCT_DEFAULT) -> tuple[list[Signal], list[ExclusionRecord]]:
+               max_sr_distance_pct: float = SR_MAX_DISTANCE_PCT_DEFAULT,
+               data_timestamp: dict = None) -> tuple[list[Signal], list[ExclusionRecord]]:
     """
     Top-level entry point: screens every symbol in `universe`
     (symbol -> OHLCV DataFrame, already fetched), returns qualifying
     Active signals + per-symbol exclusion records (Section 6.5).
+
+    data_timestamp: optional {symbol: datetime} of when each symbol's data
+    was actually fetched — carried through to each Signal for freshness
+    display / stale-fallback flagging in the UI.
     """
     all_signals: list[Signal] = []
     exclusions: list[ExclusionRecord] = []
+    data_timestamp = data_timestamp or {}
 
     for symbol, df in universe.items():
         signals, reasons = screen_symbol(symbol, company_map.get(symbol, symbol), df, trade_type,
-                                          volume_ma_period, min_rr, max_sr_distance_pct)
+                                          volume_ma_period, min_rr, max_sr_distance_pct,
+                                          data_as_of=data_timestamp.get(symbol))
         all_signals.extend(signals)
         if not signals and reasons:
             exclusions.append(ExclusionRecord(symbol=symbol, reasons=reasons))

@@ -666,6 +666,7 @@ MARUBOZU_SHADOW_TOLERANCE_PCT = 7.0    # fixed system parameter, NOT a UI filter
 TREND_SLOPE_LOOKBACK_DAYS = 12         # for MA slope up/down check
 SIDEWAYS_FLIP_WINDOW = 10              # candles checked for MA-crossing flips
 SIGNAL_SCAN_LOOKBACK_DAYS = 30         # live-computed signal scan window (Section 5)
+STALE_DATA_MAX_HOURS = 24              # max age of cached data usable as a fallback when a live fetch fails
 
 # Indicator periods — same for both Trade Types in v1 (Section 3.3 / Section 9 v2 item)
 RSI_PERIOD = 14
