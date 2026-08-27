@@ -13,7 +13,7 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
-from config import NIFTY_100_MAP, TRADE_TYPE_PARAMS, DEFAULT_TRADE_TYPE, VOLUME_MA_PERIOD_DEFAULT, MIN_RR_DEFAULT, SR_MAX_DISTANCE_PCT_DEFAULT, MAX_CUSTOM_TICKERS
+from config import NIFTY_100_MAP, NIFTY_500_MAP, TRADE_TYPE_PARAMS, DEFAULT_TRADE_TYPE, VOLUME_MA_PERIOD_DEFAULT, MIN_RR_DEFAULT, SR_MAX_DISTANCE_PCT_DEFAULT, MAX_CUSTOM_TICKERS
 from data_fetch import fetch_universe
 from signal_engine import run_screen
 
@@ -82,7 +82,7 @@ def _render_page():
             st.session_state["stored_trade_type"] = trade_type_label
             trade_type = "short_term" if trade_type_label == "Short-term" else "long_term"
         with c2:
-            _uni_options = ["Nifty 100", "Custom"]
+            _uni_options = ["Nifty 100", "Nifty 500", "Custom"]
             _uni_default = st.session_state.get("stored_universe_mode", _uni_options[0])
             universe_mode = st.selectbox(
                 "Stock Universe", _uni_options,
@@ -96,7 +96,7 @@ def _render_page():
                     "Custom tickers (comma-separated NSE symbols)",
                     value=st.session_state.get("stored_custom_tickers", ""),
                     placeholder="e.g. TCS, WIPRO, INFY",
-                    help=f"Replaces Nifty 100 for this run only — not saved between sessions, "
+                    help=f"Replaces the selected universe for this run only — not saved between sessions, "
                          f"max {MAX_CUSTOM_TICKERS} tickers.",
                     key="custom_tickers_input"
                 )
@@ -192,7 +192,7 @@ def _render_page():
         st.session_state["screen_inputs"] = dict(
             trade_type=trade_type, volume_ma_period=volume_ma_period,
             min_rr=min_rr, max_sr_distance_pct=max_sr_distance_pct,
-            custom_tickers=tuple(custom_tickers),
+            custom_tickers=tuple(custom_tickers), universe_mode=universe_mode,
         )
 
     if not st.session_state.get("has_run"):
@@ -216,7 +216,7 @@ def _render_page():
     current_gating = dict(
         trade_type=trade_type, volume_ma_period=volume_ma_period,
         min_rr=min_rr, max_sr_distance_pct=max_sr_distance_pct,
-        custom_tickers=tuple(_parse_custom_tickers(custom_tickers_raw)),
+        custom_tickers=tuple(_parse_custom_tickers(custom_tickers_raw)), universe_mode=universe_mode,
     )
     if current_gating != saved:
         st.warning("Filters changed — click **Generate Signals** to refresh results for the new settings.")
@@ -226,18 +226,23 @@ def _render_page():
     volume_ma_period = saved["volume_ma_period"]
     min_rr = saved["min_rr"]
     max_sr_distance_pct = saved["max_sr_distance_pct"]
-
     custom_tickers = saved["custom_tickers"]
+    saved_universe_mode = saved["universe_mode"]
 
     # --- Fetch (manual TTL cache, shared across users — Section 8.2) ---
     # Custom tickers are ad hoc / per-request (not persisted, not shared
     # across users), so they bypass the shared cache entirely and always
-    # fetch fresh — the shared cache is only for the fixed Nifty 100 list,
-    # where a single cache key correctly means the same thing for everyone.
+    # fetch fresh. Nifty 100 and Nifty 500 both use the shared cache, but
+    # under DIFFERENT cache keys (see below) since they're different
+    # universes — one cache key must mean the same thing for everyone.
     if custom_tickers:
         symbols = custom_tickers
         company_map = {t: t for t in custom_tickers}
         universe_label = f"Custom · {len(custom_tickers)} stock{'s' if len(custom_tickers) != 1 else ''}"
+    elif saved_universe_mode == "Nifty 500":
+        symbols = tuple(NIFTY_500_MAP.keys())
+        company_map = NIFTY_500_MAP
+        universe_label = "Nifty 500"
     else:
         symbols = tuple(NIFTY_100_MAP.keys())
         company_map = NIFTY_100_MAP
@@ -255,7 +260,7 @@ def _render_page():
         fetched_at = dt.datetime.now()
         progress_bar.empty()
     else:
-        cache_key = f"universe_data::{period}"
+        cache_key = f"universe_data::{universe_label}::{period}"
 
         cached_entry = _SHARED_CACHE.get(cache_key)
         cache_valid = (
