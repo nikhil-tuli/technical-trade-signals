@@ -279,8 +279,13 @@ def _render_page():
             # window.
             if cached_failures:
                 retry_symbols = list(cached_failures.keys())
-                with st.spinner(f"Retrying {len(retry_symbols)} previously failed symbol(s)…"):
-                    retried_data, retried_failures = fetch_universe(retry_symbols, period=period)
+                retry_progress = st.progress(0, text=f"Retrying {len(retry_symbols)} previously failed symbol(s)…")
+
+                def _retry_progress(done, total, sym):
+                    retry_progress.progress(done / total, text=f"Retrying {done} / {total} previously failed symbol(s) ({sym})")
+
+                retried_data, retried_failures = fetch_universe(retry_symbols, period=period, progress_callback=_retry_progress)
+                retry_progress.empty()
                 universe_data.update(retried_data)
                 fetch_failures = retried_failures  # only symbols still failing after retry
                 # Update the shared cache in place so other users within
