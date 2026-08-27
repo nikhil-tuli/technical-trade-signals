@@ -60,20 +60,34 @@ def _render_page():
     with st.container(border=True):
         c1, c2, c3 = st.columns(3)
         with c1:
+            # Explicitly reading back the last value and passing it as
+            # `index=` — not just relying on `key=` — because switching
+            # sidebar pages "unmounts" every widget on the page being
+            # left, and Streamlit does not reliably auto-restore a keyed
+            # widget's value on remount in that scenario. Reading it back
+            # ourselves is the robust fix regardless of that underlying
+            # behavior.
+            _tt_options = ["Short-term", "Long-term"]
+            _tt_default = st.session_state.get("trade_type_select", _tt_options[0])
             trade_type_label = st.selectbox(
-                "Trade Type", ["Short-term", "Long-term"], index=0,
+                "Trade Type", _tt_options,
+                index=_tt_options.index(_tt_default),
                 key="trade_type_select"
             )
             trade_type = "short_term" if trade_type_label == "Short-term" else "long_term"
         with c2:
+            _uni_options = ["Nifty 100", "Custom"]
+            _uni_default = st.session_state.get("universe_mode_select", _uni_options[0])
             universe_mode = st.selectbox(
-                "Stock Universe", ["Nifty 100", "Custom"], index=0,
+                "Stock Universe", _uni_options,
+                index=_uni_options.index(_uni_default),
                 key="universe_mode_select"
             )
         with c3:
             if universe_mode == "Custom":
                 custom_tickers_raw = st.text_input(
-                    "Custom tickers (comma-separated NSE symbols)", value="",
+                    "Custom tickers (comma-separated NSE symbols)",
+                    value=st.session_state.get("custom_tickers_input", ""),
                     placeholder="e.g. TCS, WIPRO, INFY",
                     help=f"Replaces Nifty 100 for this run only — not saved between sessions, "
                          f"max {MAX_CUSTOM_TICKERS} tickers.",
@@ -120,17 +134,23 @@ def _render_page():
             a1, a2, a3 = st.columns(3)
             with a1:
                 volume_ma_period = st.number_input(
-                    "Volume MA period (days)", value=VOLUME_MA_PERIOD_DEFAULT, min_value=2, max_value=60,
+                    "Volume MA period (days)",
+                    value=st.session_state.get("volume_ma_period_input", VOLUME_MA_PERIOD_DEFAULT),
+                    min_value=2, max_value=60,
                     key="volume_ma_period_input"
                 )
             with a2:
                 min_rr = st.number_input(
-                    "Min Reward:Risk", value=MIN_RR_DEFAULT, min_value=0.5, step=0.1,
+                    "Min Reward:Risk",
+                    value=st.session_state.get("min_rr_input", MIN_RR_DEFAULT),
+                    min_value=0.5, step=0.1,
                     key="min_rr_input"
                 )
             with a3:
                 max_sr_distance_pct = st.number_input(
-                    "Max SL distance from S/R (%)", value=SR_MAX_DISTANCE_PCT_DEFAULT, min_value=0.5, step=0.5,
+                    "Max SL distance from S/R (%)",
+                    value=st.session_state.get("max_sr_distance_input", SR_MAX_DISTANCE_PCT_DEFAULT),
+                    min_value=0.5, step=0.5,
                     help="The candle-based stop-loss must sit within this % of the nearest qualifying S/R zone, or the setup is excluded.",
                     key="max_sr_distance_input"
                 )
@@ -320,12 +340,19 @@ def _render_page():
     # the "matched" count above.
     f1, f2 = st.columns(2)
     with f1:
+        _pf_options = ["All patterns", "Bullish only", "Bearish only"]
+        _pf_default = st.session_state.get("pattern_filter_select", _pf_options[0])
         pattern_filter = st.selectbox(
-            "Pattern types", ["All patterns", "Bullish only", "Bearish only"],
+            "Pattern types", _pf_options,
+            index=_pf_options.index(_pf_default),
             key="pattern_filter_select"
         )
     with f2:
-        search = st.text_input("Search Symbol / Company", value="", key="search_input")
+        search = st.text_input(
+            "Search Symbol / Company",
+            value=st.session_state.get("search_input", ""),
+            key="search_input"
+        )
 
     view_signals = signals
     if pattern_filter == "Bullish only":
