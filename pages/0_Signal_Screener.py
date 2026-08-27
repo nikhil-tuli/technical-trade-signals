@@ -60,39 +60,47 @@ def _render_page():
     with st.container(border=True):
         c1, c2, c3 = st.columns(3)
         with c1:
-            # Explicitly reading back the last value and passing it as
-            # `index=` — not just relying on `key=` — because switching
-            # sidebar pages "unmounts" every widget on the page being
-            # left, and Streamlit does not reliably auto-restore a keyed
-            # widget's value on remount in that scenario. Reading it back
-            # ourselves is the robust fix regardless of that underlying
-            # behavior.
+            # IMPORTANT: persistence here is deliberately decoupled from
+            # the widget's own `key=`. A debug test confirmed plain
+            # session_state entries (not tied to any widget) survive
+            # switching sidebar pages correctly, but widget-linked state
+            # did NOT reliably survive the same switch even with key= and
+            # an explicit index=/value= default — Streamlit appears to
+            # treat widget-scoped state differently from a plain dict
+            # entry across page navigation. Fix: store the value under our
+            # OWN separate key ("stored_trade_type", not "trade_type_select")
+            # right after the widget renders, and always initialize the
+            # widget FROM that separate key — mirroring the exact pattern
+            # proven to work.
             _tt_options = ["Short-term", "Long-term"]
-            _tt_default = st.session_state.get("trade_type_select", _tt_options[0])
+            _tt_default = st.session_state.get("stored_trade_type", _tt_options[0])
             trade_type_label = st.selectbox(
                 "Trade Type", _tt_options,
                 index=_tt_options.index(_tt_default),
                 key="trade_type_select"
             )
+            st.session_state["stored_trade_type"] = trade_type_label
             trade_type = "short_term" if trade_type_label == "Short-term" else "long_term"
         with c2:
             _uni_options = ["Nifty 100", "Custom"]
-            _uni_default = st.session_state.get("universe_mode_select", _uni_options[0])
+            _uni_default = st.session_state.get("stored_universe_mode", _uni_options[0])
             universe_mode = st.selectbox(
                 "Stock Universe", _uni_options,
                 index=_uni_options.index(_uni_default),
                 key="universe_mode_select"
             )
+            st.session_state["stored_universe_mode"] = universe_mode
         with c3:
             if universe_mode == "Custom":
                 custom_tickers_raw = st.text_input(
                     "Custom tickers (comma-separated NSE symbols)",
-                    value=st.session_state.get("custom_tickers_input", ""),
+                    value=st.session_state.get("stored_custom_tickers", ""),
                     placeholder="e.g. TCS, WIPRO, INFY",
                     help=f"Replaces Nifty 100 for this run only — not saved between sessions, "
                          f"max {MAX_CUSTOM_TICKERS} tickers.",
                     key="custom_tickers_input"
                 )
+                st.session_state["stored_custom_tickers"] = custom_tickers_raw
             else:
                 custom_tickers_raw = ""
 
@@ -110,15 +118,11 @@ def _render_page():
         )
 
         # Expander's title renders BEFORE its contents, so it can't read
-        # the widgets' return values directly (chicken-and-egg). Explicit
-        # `key=` on each widget lets Streamlit persist the value in
-        # session_state across reruns, which we can read here — before the
-        # widgets themselves execute this run — to build a label that
-        # reflects whatever was last actually entered, not the hardcoded
-        # defaults.
-        _vma_display = st.session_state.get("volume_ma_period_input", VOLUME_MA_PERIOD_DEFAULT)
-        _minrr_display = st.session_state.get("min_rr_input", MIN_RR_DEFAULT)
-        _maxsr_display = st.session_state.get("max_sr_distance_input", SR_MAX_DISTANCE_PCT_DEFAULT)
+        # the widgets' return values directly (chicken-and-egg). Reading
+        # from our own "stored_*" keys here (same reasoning as above).
+        _vma_display = st.session_state.get("stored_volume_ma_period", VOLUME_MA_PERIOD_DEFAULT)
+        _minrr_display = st.session_state.get("stored_min_rr", MIN_RR_DEFAULT)
+        _maxsr_display = st.session_state.get("stored_max_sr_distance", SR_MAX_DISTANCE_PCT_DEFAULT)
 
         # `key=` here is essential, not cosmetic: without it, Streamlit
         # identifies an expander by its label text. Since the label above
@@ -135,25 +139,28 @@ def _render_page():
             with a1:
                 volume_ma_period = st.number_input(
                     "Volume MA period (days)",
-                    value=st.session_state.get("volume_ma_period_input", VOLUME_MA_PERIOD_DEFAULT),
+                    value=st.session_state.get("stored_volume_ma_period", VOLUME_MA_PERIOD_DEFAULT),
                     min_value=2, max_value=60,
                     key="volume_ma_period_input"
                 )
+                st.session_state["stored_volume_ma_period"] = volume_ma_period
             with a2:
                 min_rr = st.number_input(
                     "Min Reward:Risk",
-                    value=st.session_state.get("min_rr_input", MIN_RR_DEFAULT),
+                    value=st.session_state.get("stored_min_rr", MIN_RR_DEFAULT),
                     min_value=0.5, step=0.1,
                     key="min_rr_input"
                 )
+                st.session_state["stored_min_rr"] = min_rr
             with a3:
                 max_sr_distance_pct = st.number_input(
                     "Max SL distance from S/R (%)",
-                    value=st.session_state.get("max_sr_distance_input", SR_MAX_DISTANCE_PCT_DEFAULT),
+                    value=st.session_state.get("stored_max_sr_distance", SR_MAX_DISTANCE_PCT_DEFAULT),
                     min_value=0.5, step=0.5,
                     help="The candle-based stop-loss must sit within this % of the nearest qualifying S/R zone, or the setup is excluded.",
                     key="max_sr_distance_input"
                 )
+                st.session_state["stored_max_sr_distance"] = max_sr_distance_pct
 
         run_clicked = st.button("Generate Signals", type="primary")
 
@@ -341,18 +348,20 @@ def _render_page():
     f1, f2 = st.columns(2)
     with f1:
         _pf_options = ["All patterns", "Bullish only", "Bearish only"]
-        _pf_default = st.session_state.get("pattern_filter_select", _pf_options[0])
+        _pf_default = st.session_state.get("stored_pattern_filter", _pf_options[0])
         pattern_filter = st.selectbox(
             "Pattern types", _pf_options,
             index=_pf_options.index(_pf_default),
             key="pattern_filter_select"
         )
+        st.session_state["stored_pattern_filter"] = pattern_filter
     with f2:
         search = st.text_input(
             "Search Symbol / Company",
-            value=st.session_state.get("search_input", ""),
+            value=st.session_state.get("stored_search", ""),
             key="search_input"
         )
+        st.session_state["stored_search"] = search
 
     view_signals = signals
     if pattern_filter == "Bullish only":
