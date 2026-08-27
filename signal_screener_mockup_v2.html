@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Signal Screener — Mockup v2</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#161920; --border:#262b35;
+    --text:#e6e8ec; --muted:#8a8f9c; --accent:#3ecf8e;
+    --red:#e5484d; --amber:#e5a13d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:24px}
+  .wrap{max-width:1240px;margin:0 auto}
+  .note{background:#1c2029;border:1px dashed #3a4152;border-radius:8px;padding:10px 14px;font-size:12.5px;color:var(--muted);margin-bottom:20px}
+
+  .titlebar{display:flex;align-items:baseline;gap:10px;margin-bottom:2px}
+  h1{font-size:20px;margin:0}
+  .infobtn{
+    width:18px;height:18px;border-radius:50%;border:1px solid #454b59;color:var(--muted);
+    font-size:11px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;
+  }
+  .sub{color:var(--muted);font-size:13px;margin-bottom:20px;display:flex;align-items:center;gap:8px}
+
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px 20px;margin-bottom:18px}
+  .panel h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 14px}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px 18px}
+  .field label{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);margin-bottom:5px}
+  .field input,.field select{width:100%;background:#0d0f14;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px}
+  .field.tradetype select{border-color:var(--accent);color:var(--accent);font-weight:600}
+  .field .hint{font-size:10.5px;color:#5c6270;margin-top:3px}
+  .runbtn{margin-top:16px;background:var(--accent);color:#06251a;border:none;font-weight:600;font-size:13.5px;padding:10px 22px;border-radius:6px;cursor:pointer}
+
+  .cascade-note{
+    margin-top:14px;font-size:11.5px;color:var(--muted);background:#12151b;border:1px solid var(--border);
+    border-radius:6px;padding:8px 12px;
+  }
+  .cascade-note b{color:var(--text)}
+
+  .summary-bar{
+    display:flex;justify-content:space-between;align-items:center;background:var(--panel);
+    border:1px solid var(--border);border-radius:8px;padding:10px 16px;margin-bottom:14px;font-size:12.5px;
+  }
+  .summary-bar .counts{color:var(--muted)}
+  .summary-bar .counts b{color:var(--text)}
+  .breakdown-link{color:var(--accent);cursor:pointer;text-decoration:underline dotted;font-size:11.5px}
+  .breakdown-wrap{
+    background:#12151b;border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:14px;
+  }
+  .rollup{display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-bottom:4px}
+  .rollup span b{color:var(--text)}
+  .multi-note{font-size:10.5px;color:#5c6270;margin-bottom:10px}
+  .exc-table{width:100%;border-collapse:collapse;margin-top:6px}
+  .exc-table th{background:transparent;border-bottom:1px solid var(--border);padding:6px 8px;font-size:10px}
+  .exc-table td{padding:7px 8px;border-bottom:1px solid #1d212a;font-size:12px}
+  .exc-table tr:last-child td{border-bottom:none}
+  .rtag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;border:1px solid var(--border);color:var(--muted);margin-right:4px}
+
+  .loading-state{
+    background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:22px;margin-bottom:22px;text-align:center;
+  }
+  .loading-state .lbl{font-size:12.5px;color:var(--muted);margin-bottom:10px}
+  .progressbar{width:100%;height:8px;background:#20242e;border-radius:4px;overflow:hidden;margin-bottom:6px}
+  .progressbar span{display:block;height:100%;width:42%;background:var(--accent)}
+  .loading-state .count{font-size:11px;color:#5c6270}
+  .ghost-row{height:14px;background:#1a1e26;border-radius:4px;margin:8px 0;opacity:.5}
+
+  .out-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .out-head h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0}
+  .legend{font-size:11px;color:var(--muted)}
+
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--border);background:#12141a;cursor:pointer}
+  th .arrow{opacity:.4;font-size:9px;margin-left:3px}
+  td{padding:11px 12px;border-bottom:1px solid #1d212a;font-size:13px;vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  .sym{font-weight:600}
+  .co{color:var(--muted);font-size:12px}
+
+  .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
+  .pill.bull{background:rgba(62,207,142,.15);color:var(--accent)}
+  .pill.bear{background:rgba(229,72,77,.15);color:var(--red)}
+
+  .tag{display:inline-block;padding:2px 7px;border-radius:5px;font-size:10.5px;border:1px solid var(--border);color:var(--muted)}
+  .tag.up{color:var(--accent);border-color:rgba(62,207,142,.3)}
+  .tag.down{color:var(--red);border-color:rgba(229,72,77,.3)}
+  .tag.side{color:var(--amber);border-color:rgba(229,161,61,.3)}
+
+  .levels{font-size:12px;line-height:1.6}
+  .levels .rr{font-weight:700;color:var(--text)}
+  .levels .l{color:var(--muted)}
+  .levels .l b{color:var(--text);font-weight:500}
+
+  .conf{font-size:12px}
+  .conf b{color:var(--text)}
+  .bar{width:56px;height:5px;background:#20242e;border-radius:3px;margin-top:4px;overflow:hidden}
+  .bar span{display:block;height:100%;background:var(--accent)}
+
+  .expand{font-size:11px;color:var(--muted);cursor:pointer;text-decoration:underline dotted;white-space:nowrap}
+
+  .details-preview{
+    margin-top:16px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px 20px;
+  }
+  .details-preview h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 10px}
+  .drow{display:flex;justify-content:space-between;font-size:12.5px;padding:6px 0;border-bottom:1px solid #1d212a}
+  .drow:last-child{border-bottom:none}
+  .drow .k{color:var(--muted)}
+  .drow .v{color:var(--text);text-align:right;max-width:60%}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="note">Rough wireframe v2 — placeholder data, no live logic. Reflects finalized requirements doc. For layout &amp; flow feedback only.</div>
+
+  <div class="titlebar">
+    <h1>Signal Screener</h1>
+    <span class="infobtn" title="Candlestick pattern definitions">i</span>
+  </div>
+  <div class="sub">
+    Nifty 100 · pattern + volume + S/R + R:R confirmed setups
+    <span class="infobtn" title="R:R / Trade Levels methodology">i</span>
+  </div>
+
+  <!-- INPUT PANEL -->
+  <div class="panel">
+    <h2>Inputs</h2>
+    <div class="grid">
+      <div class="field tradetype">
+        <label>Trade Type</label>
+        <select><option>Short-term</option><option>Long-term</option></select>
+      </div>
+      <div class="field">
+        <label>Universe</label>
+        <select><option>Nifty 100</option><option>Nifty 500</option><option>My 15-stock list</option></select>
+      </div>
+      <div class="field">
+        <label>Volume MA period</label>
+        <input value="10" />
+        <div class="hint">days — volume must be ≥ this MA</div>
+      </div>
+      <div class="field">
+        <label>Min Reward:Risk</label>
+        <input value="2.0" />
+        <div class="hint">setups below this are excluded</div>
+      </div>
+      <div class="field">
+        <label>Pattern types</label>
+        <select><option>All patterns</option><option>Bullish only</option><option>Bearish only</option></select>
+      </div>
+      <div class="field">
+        <label>Search Symbol / Company</label>
+        <input placeholder="e.g. TCS" />
+      </div>
+    </div>
+    <button class="runbtn">Generate Signals</button>
+    <div class="cascade-note">
+      <b>Trade Type</b> sets S/R lookback, fractal width, touch-spacing, zone buffer, Primary Trend MA, and pattern prior-trend lookback automatically — these aren't separately editable, to keep results internally consistent.
+    </div>
+  </div>
+
+  <!-- LOADING STATE EXAMPLE (shown once, illustrating what a cache-miss fetch looks like — not part of normal flow) -->
+  <div class="loading-state">
+    <div class="lbl">Fetching data — 42 / 100 symbols</div>
+    <div class="progressbar"><span></span></div>
+    <div class="count">Table below is greyed out until this completes. Cache-hit runs (same session, within refresh window) skip this and return near-instantly.</div>
+  </div>
+
+  <!-- EXCLUSION SUMMARY -->
+  <div class="summary-bar">
+    <div class="counts">100 screened → <b>6 signals</b> · 94 excluded</div>
+    <div class="breakdown-link">See breakdown ▾</div>
+  </div>
+  <div class="breakdown-wrap">
+    <div class="rollup">
+      <span>No candlestick pattern: <b>41</b></span>
+      <span>Volume below MA: <b>18</b></span>
+      <span>No valid S/R zone: <b>22</b></span>
+      <span>R:R below threshold: <b>13</b></span>
+    </div>
+    <div class="multi-note">Counts above don't sum to 94 — a stock can fail more than one gate. Expanded view below lists each excluded stock once, with every reason it failed.</div>
+    <table class="exc-table">
+      <thead><tr><th>Symbol</th><th>Failed gates</th></tr></thead>
+      <tbody>
+        <tr><td>ITC</td><td><span class="rtag">No candlestick pattern</span><span class="rtag">Volume below MA</span></td></tr>
+        <tr><td>SBIN</td><td><span class="rtag">No valid S/R zone</span></td></tr>
+        <tr><td>RELIANCE</td><td><span class="rtag">No candlestick pattern</span></td></tr>
+        <tr><td>MARUTI</td><td><span class="rtag">R:R below threshold</span><span class="rtag">No valid S/R zone</span></td></tr>
+        <tr><td colspan="2" style="color:#5c6270;font-size:11px;text-align:center;padding-top:10px">… 90 more (searchable via Search Symbol/Company above)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- OUTPUT -->
+  <div class="out-head">
+    <h2>Signals — 6 matched</h2>
+    <div class="legend">Rows = pattern + volume + S/R + R:R all confirmed · trend &amp; indicators shown as context, not filters</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol <span class="arrow">▾ (default)</span></th>
+        <th>Direction <span class="arrow">▾</span></th>
+        <th>Trade Levels <span class="arrow">▾</span></th>
+        <th>Primary Trend <span class="arrow">▾</span></th>
+        <th>Confluence <span class="arrow">▾</span></th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>
+          <div class="sym">HDFCAMC</div>
+          <div class="co">Bullish Engulfing · 24 Aug</div>
+        </td>
+        <td><span class="pill bull">Bullish</span></td>
+        <td>
+          <div class="levels">
+            <div class="l">Entry <b>₹2618</b> · SL <b>₹2567</b></div>
+            <div class="l">Target <b>₹2760</b> &nbsp;<span class="rr">2.8x</span></div>
+          </div>
+        </td>
+        <td><span class="tag up">Up</span></td>
+        <td>
+          <div class="conf"><b>4/4</b> confirming</div>
+          <div class="bar"><span style="width:100%"></span></div>
+        </td>
+        <td class="expand">Details</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="sym">TECHM</div>
+          <div class="co">Hammer · 24 Aug</div>
+        </td>
+        <td><span class="pill bull">Bullish</span></td>
+        <td>
+          <div class="levels">
+            <div class="l">Entry <b>₹1584</b> · SL <b>₹1548</b></div>
+            <div class="l">Target <b>₹1706</b> &nbsp;<span class="rr">3.4x</span></div>
+          </div>
+        </td>
+        <td><span class="tag down">Down</span></td>
+        <td>
+          <div class="conf"><b>3/4</b> confirming</div>
+          <div class="bar"><span style="width:75%"></span></div>
+        </td>
+        <td class="expand">Details</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="sym">WIPRO</div>
+          <div class="co">Bearish Marubozu · 24 Aug</div>
+        </td>
+        <td><span class="pill bear">Bearish</span></td>
+        <td>
+          <div class="levels">
+            <div class="l">Entry <b>₹181</b> · SL <b>₹186</b></div>
+            <div class="l">Target <b>₹168</b> &nbsp;<span class="rr">2.0x</span></div>
+          </div>
+        </td>
+        <td><span class="tag down">Down</span></td>
+        <td>
+          <div class="conf"><b>4/4</b> confirming</div>
+          <div class="bar"><span style="width:100%"></span></div>
+        </td>
+        <td class="expand">Details</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="sym">DMART</div>
+          <div class="co">Morning Star · 23 Aug</div>
+        </td>
+        <td><span class="pill bull">Bullish</span></td>
+        <td>
+          <div class="levels">
+            <div class="l">Entry <b>₹3940</b> · SL <b>₹3860</b></div>
+            <div class="l">Target <b>₹4100</b> &nbsp;<span class="rr">2.0x</span></div>
+          </div>
+        </td>
+        <td><span class="tag side">Sideways</span></td>
+        <td>
+          <div class="conf"><b>2/4</b> confirming</div>
+          <div class="bar"><span style="width:50%;background:var(--amber)"></span></div>
+        </td>
+        <td class="expand">Details</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="sym">DMART</div>
+          <div class="co">Bullish Engulfing · 23 Aug</div>
+        </td>
+        <td><span class="pill bull">Bullish</span></td>
+        <td>
+          <div class="levels">
+            <div class="l">Entry <b>₹3940</b> · SL <b>₹3860</b></div>
+            <div class="l">Target <b>₹4100</b> &nbsp;<span class="rr">2.0x</span></div>
+          </div>
+        </td>
+        <td><span class="tag side">Sideways</span></td>
+        <td>
+          <div class="conf"><b>2/4</b> confirming</div>
+          <div class="bar"><span style="width:50%;background:var(--amber)"></span></div>
+        </td>
+        <td class="expand">Details</td>
+      </tr>
+      <tr>
+        <td>
+          <div class="sym">INFY</div>
+          <div class="co">Evening Star · 22 Aug</div>
+        </td>
+        <td><span class="pill bear">Bearish</span></td>
+        <td>
+          <div class="levels">
+            <div class="l">Entry <b>₹1130</b> · SL <b>₹1152</b></div>
+            <div class="l">Target <b>₹1064</b> &nbsp;<span class="rr">3.0x</span></div>
+          </div>
+        </td>
+        <td><span class="tag up">Up</span></td>
+        <td>
+          <div class="conf"><b>1/4</b> confirming</div>
+          <div class="bar"><span style="width:25%;background:var(--red)"></span></div>
+        </td>
+        <td class="expand">Details</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- SAMPLE DETAILS EXPANSION (static preview, showing what one row's Details reveals) -->
+  <div class="details-preview">
+    <h3>Details preview — HDFCAMC row (example of expand content)</h3>
+    <div class="drow"><span class="k">Candle shape</span><span class="v">Body 92% of range · engulfs prior red body fully</span></div>
+    <div class="drow"><span class="k">Volume</span><span class="v">1.6x 10-day avg volume</span></div>
+    <div class="drow"><span class="k">Primary Trend detail</span><span class="v">20 MA rising · no flips in last 10 candles</span></div>
+    <div class="drow"><span class="k">S/R zone (stop-loss)</span><span class="v">₹2567 zone · 3 touches, last ~18 days ago · fractal-confirmed</span></div>
+    <div class="drow"><span class="k">S/R zone (target)</span><span class="v">₹2760 zone · 4 touches</span></div>
+    <div class="drow"><span class="k">R:R breakdown</span><span class="v">Entry ₹2618 (ref., prev. close) → SL ₹2567 → Target ₹2760 = 2.8x</span></div>
+    <div class="drow"><span class="k">Indicators</span><span class="v">RSI 61 · MACD bullish crossover · Supertrend bullish · Aroon up 84</span></div>
+  </div>
+
+</div>
+</body>
+</html>
