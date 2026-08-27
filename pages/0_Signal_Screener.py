@@ -265,9 +265,34 @@ def _render_page():
 
         if cache_valid:
             with st.spinner("Loading cached data…"):
-                universe_data = cached_entry["data"]
-                fetch_failures = cached_entry.get("failures", {})
+                universe_data = dict(cached_entry["data"])
+                cached_failures = dict(cached_entry.get("failures", {}))
             fetched_at = cached_entry["fetched_at"]
+
+            # Cache stores successes AND failures together, but a failure
+            # (timeout, transient network issue) is not necessarily still
+            # failing a minute later — only the successful fetches are
+            # genuinely "cacheable" data; a prior failure means we simply
+            # don't have that symbol's data yet, and every subsequent
+            # click should keep trying for it rather than treating it as
+            # a settled, cache-worthy result for the rest of the TTL
+            # window.
+            if cached_failures:
+                retry_symbols = list(cached_failures.keys())
+                with st.spinner(f"Retrying {len(retry_symbols)} previously failed symbol(s)…"):
+                    retried_data, retried_failures = fetch_universe(retry_symbols, period=period)
+                universe_data.update(retried_data)
+                fetch_failures = retried_failures  # only symbols still failing after retry
+                # Update the shared cache in place so other users within
+                # this TTL window benefit from the retry too, without
+                # resetting the TTL clock (fetched_at unchanged) — this
+                # isn't a fresh fetch of everything, just a correction of
+                # what was previously known to be incomplete.
+                _SHARED_CACHE[cache_key] = {
+                    "data": universe_data, "fetched_at": fetched_at, "failures": fetch_failures,
+                }
+            else:
+                fetch_failures = {}
         else:
             progress_bar = st.progress(0, text="Starting fetch…")
 
