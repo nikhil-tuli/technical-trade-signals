@@ -48,7 +48,7 @@ def _prior_trend(df: pd.DataFrame, idx: int, lookback: int) -> str:
     window = df.iloc[start:idx]
     if len(window) < 2:
         return "flat"
-    change_pct = (window["Close"].iloc[-1] - window["Close"].iloc[0]) / window["Close"].iloc[0] * 100
+    change_pct = (window["Close"].iloc[-1] - window["Close"].iloc[0]) / window["Close"].iloc[0] * 100 #compares difference between first close and last close of the window
     if change_pct > 1.0:
         return "up"
     if change_pct < -1.0:

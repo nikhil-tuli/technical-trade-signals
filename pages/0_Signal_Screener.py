@@ -16,8 +16,9 @@ import streamlit as st
 from config import NIFTY_100_MAP, NIFTY_500_MAP, TRADE_TYPE_PARAMS, DEFAULT_TRADE_TYPE, VOLUME_MA_PERIOD_DEFAULT, MIN_RR_DEFAULT, SR_MAX_DISTANCE_PCT_DEFAULT, MAX_CUSTOM_TICKERS, STALE_DATA_MAX_HOURS
 from data_fetch import fetch_universe
 from signal_engine import run_screen
+from charting import build_signal_chart
 
-CACHE_TTL_SECONDS = 30 * 60  # 30 min, within the 15-60 min range from Section 8.2
+CACHE_TTL_SECONDS = 30 * 60  # 30 min data caching logic
 
 
 @st.cache_resource
@@ -457,6 +458,15 @@ def _render_page():
             f"Signal formed on **{sig.formation_date.strftime('%d %b %Y')}**, still **Active** — "
             f"price hasn't closed beyond the stop-loss (₹{sig.stop_loss}) or target (₹{sig.target}) since."
         )
+
+        # Chart reuses data already fetched for screening — no new network
+        # call. Spinner is a safety net for slower renders (e.g. a slow
+        # browser), not an expectation of real latency here.
+        with st.spinner("Loading chart…"):
+            chart_df = universe_data.get(sig.symbol)
+            if chart_df is not None:
+                fig = build_signal_chart(chart_df, sig)
+                st.plotly_chart(fig, use_container_width=True)
 
         trade_type_label_d = "Short-term" if d.get("trade_type") == "short_term" else "Long-term"
 
