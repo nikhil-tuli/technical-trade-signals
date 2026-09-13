@@ -10,19 +10,6 @@ st.set_page_config() and st.navigation() only; this file is pure page
 content, executed by Streamlit when this page is selected.
 """
 import datetime as dt
-import sys
-from pathlib import Path
-
-# Root-level sibling modules (config.py, data_fetch.py, etc.) live one
-# directory up from this file. Streamlit's st.Page file-based navigation
-# does not reliably put that directory on sys.path when executing this
-# page (confirmed via streamlit.testing.v1.AppTest — reproduces a bare
-# ModuleNotFoundError for 'config'/'data_fetch' without this line, same
-# error reported when running locally). This is independent of cwd or
-# how `streamlit run app.py` was invoked — always resolves relative to
-# this file's own location.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 import pandas as pd
 import streamlit as st
 
@@ -30,7 +17,6 @@ from config import NIFTY_100_MAP, NIFTY_500_MAP, TRADE_TYPE_PARAMS, DEFAULT_TRAD
 from data_fetch import fetch_universe
 from signal_engine import run_screen
 from charting import build_signal_chart
-import how_it_works
 
 CACHE_TTL_SECONDS = 30 * 60  # 30 min data caching logic
 
@@ -607,18 +593,5 @@ def _render_page():
         i4.metric("Aroon", cv.get("Aroon", "—"))
 
 
-# Top-level tabs (Section 'How this works as a tab, not a separate page'
-# decision) — st.tabs() instead of a second sidebar page. Safe against the
-# known "st.tabs resets to first tab on any script rerun" Streamlit
-# behavior here specifically because every interactive widget (filters,
-# Generate Signals button) lives in the Screener tab, which IS the first
-# tab — reruns they trigger happen while the user is already on it. The
-# How This Works tab has zero widgets, so nothing there ever triggers a
-# rerun that could visually kick the user back to tab 1. If this tab ever
-# gains an interactive element, revisit — see README for the st.radio-as-
-# tabs fallback if that guarantee stops holding.
-_tab_screener, _tab_how = st.tabs(["Screener", "How this works"])
-with _tab_screener:
-    _render_page()
-with _tab_how:
-    how_it_works.render_signal_explainer()
+
+_render_page()
