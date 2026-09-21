@@ -361,6 +361,110 @@ def build_momentum_table(price_data: dict, dma_period: int, exclude_last_month: 
     return add_relative_momentum(table)
 
 
+def build_sector_table(table: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregates a full (unfiltered) per-stock momentum table — as
+    returned by build_momentum_table() — into one row per sector: the
+    Sector View. MUST be called on the full fetched universe, not an
+    already stock-filtered subset, so sector figures reflect the sector
+    as a whole (same principle as add_relative_momentum's sector-average
+    columns above).
+
+    All aggregates are EQUAL-WEIGHTED — a plain mean/median across the
+    sector's stocks, not weighted by market cap. Cap-weighting would
+    need a separate market-cap fetch (yfinance .info/fast_info is a
+    heavier, less reliable call than the OHLCV history already being
+    pulled) and is deliberately deferred, not silently approximated;
+    equal-weighting is a real, stated methodology here, not a stand-in
+    for a "better" number.
+
+    Rows with sector = None (e.g. Custom tickers outside the Nifty 500
+    universe, which has no sector data for them) are EXCLUDED from the
+    sector table itself — there's no sector to group them under — but
+    ARE included in the universe-wide 12mo average used for the
+    "vs universe" column, since that benchmark should reflect the whole
+    fetched universe, not just the subset with a known sector.
+
+    Breadth figures (stocks up, stocks above DMA) use the count of
+    stocks in that sector with a NON-NULL value for that specific
+    metric as the denominator — not the sector's total stock count — so
+    a stock lacking enough history for a given metric is excluded from
+    both the numerator and denominator, not silently counted as "not
+    up" / "not above DMA".
+    """
+    if table.empty:
+        return pd.DataFrame()
+
+    universe_avg_12mo = table["return_12mo_pct"].mean()
+
+    sectored = table[table["sector"].notna()]
+    if sectored.empty:
+        return pd.DataFrame()
+
+    def _mean_or_none(s: pd.Series) -> float | None:
+        return round(s.mean(), 2) if s.notna().any() else None
+
+    def _median_or_none(s: pd.Series) -> float | None:
+        return round(s.median(), 2) if s.notna().any() else None
+
+    rows = []
+    for sector_name, grp in sectored.groupby("sector"):
+        avg_12mo = grp["return_12mo_pct"].mean()
+
+        up_valid = grp["return_12mo_pct"].dropna()
+        stocks_up_count = int((up_valid > 0).sum())
+        stocks_up_pct = round(stocks_up_count / len(up_valid) * 100, 1) if len(up_valid) else None
+
+        dma_valid = grp["price_above_dma"].dropna()
+        stocks_above_dma_count = int((dma_valid == True).sum())  # noqa: E712
+        stocks_above_dma_pct = round(stocks_above_dma_count / len(dma_valid) * 100, 1) if len(dma_valid) else None
+
+        rows.append({
+            "sector": sector_name,
+            "avg_return_12mo_pct": round(avg_12mo, 2) if pd.notna(avg_12mo) else None,
+            "med_return_12mo_pct": _median_or_none(grp["return_12mo_pct"]),
+            "avg_return_30d_pct": _mean_or_none(grp["return_30d_pct"]),
+            "avg_return_60d_pct": _mean_or_none(grp["return_60d_pct"]),
+            "avg_return_90d_pct": _mean_or_none(grp["return_90d_pct"]),
+            "avg_return_180d_pct": _mean_or_none(grp["return_180d_pct"]),
+            "vs_universe_return_12mo_pct": (
+                round(avg_12mo - universe_avg_12mo, 2)
+                if pd.notna(avg_12mo) and pd.notna(universe_avg_12mo) else None
+            ),
+            "num_stocks": len(grp),
+            "stocks_up_12mo_count": stocks_up_count,
+            "stocks_up_12mo_pct": stocks_up_pct,
+            "stocks_above_dma_count": stocks_above_dma_count,
+            "stocks_above_dma_pct": stocks_above_dma_pct,
+            "avg_sharpe_ratio": _mean_or_none(grp["sharpe_ratio"]),
+            "avg_annual_traded_turnover_cr": _mean_or_none(grp["annual_traded_turnover_cr"]),
+            "avg_relative_volume_pct": _mean_or_none(grp["volume_participation_pct"]),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def apply_sector_filters(sector_table: pd.DataFrame, sector: str | None = None,
+                          min_avg_return_12mo_pct: float | None = None,
+                          min_avg_sharpe_ratio: float | None = None) -> pd.DataFrame:
+    """Eligibility filters on the SECTOR table (one row per sector) —
+    distinct from apply_filters() above, which filters individual
+    stocks. None means "no filter" for the two numeric thresholds,
+    same convention used throughout this module."""
+    df = sector_table.copy()
+
+    if sector and sector != "All sectors":
+        df = df[df["sector"] == sector]
+
+    if min_avg_return_12mo_pct is not None:
+        df = df[df["avg_return_12mo_pct"].notna() & (df["avg_return_12mo_pct"] >= min_avg_return_12mo_pct)]
+
+    if min_avg_sharpe_ratio is not None:
+        df = df[df["avg_sharpe_ratio"].notna() & (df["avg_sharpe_ratio"] >= min_avg_sharpe_ratio)]
+
+    return df
+
+
 def apply_filters(table: pd.DataFrame, sector: str | None = None,
                    min_listing_months: int | None = None,
                    liquidity_floor_cr: float | None = None,

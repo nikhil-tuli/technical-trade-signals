@@ -16,6 +16,7 @@ coverage for here.
 """
 import zlib
 
+import pandas as pd
 import pytest
 
 import config
@@ -145,3 +146,70 @@ def test_no_matches_produces_empty_not_broken_table(make_ohlcv, monkeypatch):
     filtered = me.apply_filters(table, liquidity_floor_cr=999_999.0, require_above_dma=False)
     assert filtered.empty
     assert list(filtered.columns) == list(table.columns)  # shape preserved even when empty
+
+
+REAL_MULTI_SECTOR_SYMBOLS = ["TCS", "INFY", "WIPRO", "HDFCBANK", "ICICIBANK", "SBIN"]
+
+
+def test_sector_view_full_pipeline_real_symbols_multiple_sectors(make_ohlcv, monkeypatch):
+    """
+    Mirrors test_five_real_symbols_full_pipeline above, but for the
+    Sector View path: fetch -> build per-stock table -> aggregate to
+    sectors -> filter -> sort -> assemble the exact display DataFrame
+    the Sector View tab renders. Real symbols spanning 2 real sectors
+    (IT, Financial Services), so the aggregation and "vs universe"
+    math are checked against real NSE sector data, not a stub.
+    """
+    for sym in REAL_MULTI_SECTOR_SYMBOLS:
+        assert sym in config.NIFTY_500_MAP
+
+    drifts = {"TCS": 0.4, "INFY": 0.3, "WIPRO": 0.1, "HDFCBANK": -0.1, "ICICIBANK": 0.05, "SBIN": 0.15}
+    synthetic_frames = {
+        sym: make_ohlcv(n_days=300, daily_drift_pct=drifts[sym], start_price=500,
+                         volume=2_000_000, seed=_stable_seed(sym))
+        for sym in REAL_MULTI_SECTOR_SYMBOLS
+    }
+
+    def _fake_history(nse_symbol, period="18mo"):
+        return synthetic_frames.get(nse_symbol), None
+
+    monkeypatch.setattr(data_fetch, "fetch_history", _fake_history)
+
+    price_data, failures = data_fetch.fetch_universe(REAL_MULTI_SECTOR_SYMBOLS, period=config.MOMENTUM_FETCH_PERIOD)
+    assert failures == {}
+
+    table = me.build_momentum_table(price_data, dma_period=config.MOMENTUM_DMA_DEFAULT, exclude_last_month=False)
+    sector_table = me.build_sector_table(table)
+
+    # Real NSE data: TCS/INFY/WIPRO -> Information Technology, HDFCBANK/ICICIBANK/SBIN -> Financial Services
+    assert set(sector_table["sector"]) == {"Information Technology", "Financial Services"}
+
+    it_row = sector_table[sector_table["sector"] == "Information Technology"].iloc[0]
+    fs_row = sector_table[sector_table["sector"] == "Financial Services"].iloc[0]
+    assert it_row["num_stocks"] == 3
+    assert fs_row["num_stocks"] == 3
+    # IT has the strongest drifts -> should have the higher average 12mo return
+    assert it_row["avg_return_12mo_pct"] > fs_row["avg_return_12mo_pct"]
+    # vs-universe deltas should be internally consistent with each other
+    universe_avg = table["return_12mo_pct"].mean()
+    assert it_row["vs_universe_return_12mo_pct"] == pytest.approx(it_row["avg_return_12mo_pct"] - universe_avg, abs=0.01)
+
+    # --- filter + sort, same calls the page makes ---
+    filtered = me.apply_sector_filters(sector_table, min_avg_return_12mo_pct=0.0)
+    assert set(filtered["sector"]) == {"Information Technology", "Financial Services"}  # both positive-average here
+    ranked = me.sort_table(filtered, sort_by="avg_return_12mo_pct")
+    assert ranked.iloc[0]["sector"] == "Information Technology"
+
+    # --- assemble display frame, same shape the page builds ---
+    def _fmt_count_pct(count, pct):
+        return f"{int(count)} ({pct:.0f}%)" if pct == pct else "—"  # pct==pct is a NaN-safe check
+
+    display = pd.DataFrame({
+        "Sector": ranked["sector"],
+        "Avg 12mo returns %": ranked["avg_return_12mo_pct"],
+        "Stocks up (12mo)": [
+            _fmt_count_pct(c, p) for c, p in zip(ranked["stocks_up_12mo_count"], ranked["stocks_up_12mo_pct"])
+        ],
+    })
+    assert display.iloc[0]["Sector"] == "Information Technology"
+    assert "(" in display.iloc[0]["Stocks up (12mo)"]  # "N (P%)" format, not raw separate numbers

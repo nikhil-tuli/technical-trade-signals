@@ -59,7 +59,10 @@ from config import (
     MOMENTUM_RISK_FREE_RATE_ASOF,
 )
 from data_fetch import fetch_universe
-from momentum_engine import build_momentum_table, apply_filters, sort_table, price_points
+from momentum_engine import (
+    build_momentum_table, apply_filters, sort_table, price_points,
+    build_sector_table, apply_sector_filters,
+)
 from charting import build_plain_chart
 import nse_master_data
 import how_it_works
@@ -98,6 +101,78 @@ def _parse_custom_tickers(raw: str) -> list[str]:
         if sym and sym not in seen:
             seen.append(sym)
     return seen
+
+
+def _handle_generate_click(run_clicked: bool, universe_mode: str, custom_tickers_raw: str, key_prefix: str) -> None:
+    """
+    Shared fetch/cache logic for the "Generate rankings" button, used by
+    both the Stock Screener and Sector View tabs. Each tab still renders
+    its OWN universe selectbox / custom-ticker input / button widgets (a
+    few lines, deliberately left duplicated — trivial layout, low
+    regression risk to share). This function is the actual business
+    logic — cache key derivation, staleness check, the fetch call,
+    session-state persistence — which is where sharing actually matters,
+    so the two tabs can never drift into inconsistent caching behavior.
+    Cache entries are keyed by UNIVERSE NAME (nifty100_momentum /
+    nifty500_momentum), not by tab, so fetching Nifty 500 from either
+    tab is reused by the other tab too if it picks the same universe.
+    Writes st.session_state[f"{key_prefix}_has_run"] and
+    [f"{key_prefix}_run_inputs"] — callers read those two keys
+    themselves (matches the pattern this was extracted from).
+    """
+    if not run_clicked:
+        return
+
+    custom_tickers = _parse_custom_tickers(custom_tickers_raw)
+    if len(custom_tickers) > MAX_CUSTOM_TICKERS:
+        st.error(
+            f"Too many custom tickers ({len(custom_tickers)}) — max {MAX_CUSTOM_TICKERS} allowed. "
+            f"Shorten the list and click Generate rankings again."
+        )
+        return
+
+    # Custom tickers are ad hoc/per-request — bypass the shared cache
+    # entirely and always fetch fresh (same rule as the Signal
+    # Screener). Nifty 100 and Nifty 500 each get their own cache key
+    # so switching between them never evicts the other.
+    if custom_tickers:
+        cache_key = None
+        symbols = custom_tickers
+    elif universe_mode == "Nifty 100":
+        cache_key = "nifty100_momentum"
+        symbols = list(NIFTY_100_MAP.keys())
+    else:
+        cache_key = "nifty500_momentum"
+        symbols = list(NIFTY_500_MAP.keys())
+
+    now = dt.datetime.now()
+    cache_entry = _MOMENTUM_CACHE.get(cache_key) if cache_key else None
+    is_stale = (
+        cache_key is None  # custom -> always "stale", i.e. always fetch
+        or cache_entry is None
+        or (now - cache_entry["fetched_at"]).total_seconds() > MOMENTUM_CACHE_TTL_SECONDS
+    )
+    if is_stale:
+        progress = st.progress(0.0, text=f"Fetching {len(symbols)} symbol(s)…")
+
+        def _progress_cb(done, total, sym):
+            progress.progress(done / total, text=f"Fetching {sym} ({done}/{total})")
+
+        price_data, failures = fetch_universe(symbols, period=MOMENTUM_FETCH_PERIOD, progress_callback=_progress_cb)
+        progress.empty()
+        cache_entry = {"price_data": price_data, "failures": failures, "fetched_at": now}
+        if cache_key:
+            _MOMENTUM_CACHE[cache_key] = cache_entry
+
+    universe_label = (
+        f"Custom · {len(custom_tickers)} stock{'s' if len(custom_tickers) != 1 else ''}"
+        if custom_tickers else universe_mode
+    )
+    st.session_state[f"{key_prefix}_has_run"] = True
+    st.session_state[f"{key_prefix}_run_inputs"] = dict(
+        universe_mode=universe_mode, custom_tickers=tuple(custom_tickers),
+        cache_key=cache_key, cache_entry=cache_entry, universe_label=universe_label,
+    )
 
 
 def _render_screener_tab():
@@ -185,59 +260,9 @@ def _render_screener_tab():
 
         exclude_last_month = st.checkbox("Exclude last 1 month from 12mo return", key="mom_exclude_last_month")
 
-        run_clicked = st.button("Generate rankings", type="primary")
+        run_clicked = st.button("Generate rankings", type="primary", key="mom_generate")
 
-    if run_clicked:
-        custom_tickers = _parse_custom_tickers(custom_tickers_raw)
-        if len(custom_tickers) > MAX_CUSTOM_TICKERS:
-            st.error(
-                f"Too many custom tickers ({len(custom_tickers)}) — max {MAX_CUSTOM_TICKERS} allowed. "
-                f"Shorten the list and click Generate rankings again."
-            )
-            return
-
-        # Custom tickers are ad hoc/per-request — bypass the shared
-        # cache entirely and always fetch fresh (same rule as the
-        # Signal Screener). Nifty 100 and Nifty 500 each get their own
-        # cache key so switching between them never evicts the other.
-        if custom_tickers:
-            cache_key = None
-            symbols = custom_tickers
-        elif universe_mode == "Nifty 100":
-            cache_key = "nifty100_momentum"
-            symbols = list(NIFTY_100_MAP.keys())
-        else:
-            cache_key = "nifty500_momentum"
-            symbols = list(NIFTY_500_MAP.keys())
-
-        now = dt.datetime.now()
-        cache_entry = _MOMENTUM_CACHE.get(cache_key) if cache_key else None
-        is_stale = (
-            cache_key is None  # custom -> always "stale", i.e. always fetch
-            or cache_entry is None
-            or (now - cache_entry["fetched_at"]).total_seconds() > MOMENTUM_CACHE_TTL_SECONDS
-        )
-        if is_stale:
-            progress = st.progress(0.0, text=f"Fetching {len(symbols)} symbol(s)…")
-
-            def _progress_cb(done, total, sym):
-                progress.progress(done / total, text=f"Fetching {sym} ({done}/{total})")
-
-            price_data, failures = fetch_universe(symbols, period=MOMENTUM_FETCH_PERIOD, progress_callback=_progress_cb)
-            progress.empty()
-            cache_entry = {"price_data": price_data, "failures": failures, "fetched_at": now}
-            if cache_key:
-                _MOMENTUM_CACHE[cache_key] = cache_entry
-
-        universe_label = (
-            f"Custom · {len(custom_tickers)} stock{'s' if len(custom_tickers) != 1 else ''}"
-            if custom_tickers else universe_mode
-        )
-        st.session_state["mom_has_run"] = True
-        st.session_state["mom_run_inputs"] = dict(
-            universe_mode=universe_mode, custom_tickers=tuple(custom_tickers),
-            cache_key=cache_key, cache_entry=cache_entry, universe_label=universe_label,
-        )
+    _handle_generate_click(run_clicked, universe_mode, custom_tickers_raw, key_prefix="mom")
 
     if not st.session_state.get("mom_has_run"):
         st.info("Set your filters and click **Generate rankings** to run the screen.")
@@ -442,8 +467,192 @@ def _render_screener_tab():
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-_tab_screener, _tab_how = st.tabs(["Screener", "How this works"])
+def _render_sector_view_tab():
+    """
+    One row per sector, aggregated from the SAME cache/fetch mechanism
+    as the Stock Screener tab (shared by universe name via
+    _handle_generate_click — see that function's docstring). Uses its
+    own key_prefix ("sec") so its widgets don't collide with the Stock
+    Screener tab's, but picking the same Stock Universe here reuses that
+    tab's already-fetched data instead of re-fetching.
+
+    Sector aggregates are computed from the FULL fetched universe,
+    BEFORE any of this tab's own filters are applied — same principle
+    as the Stock Screener tab's sector-relative columns — so a sector's
+    numbers reflect the sector as a whole, not just whichever stocks
+    happen to pass a filter.
+
+    No row-selection/drill-down here (unlike the Stock Screener tab) —
+    there's no per-sector time series to chart, and the earlier
+    on_select stability work in that tab was specifically to solve a
+    row-selection bug that doesn't apply to a plain aggregated table.
+    """
+    st.title("Sector View")
+    st.caption("Momentum aggregated by sector — equal-weighted averages across each sector's stocks, "
+               "computed over the full fetched universe. Informational only, not a recommendation.")
+
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            _uni_options = ["Nifty 500", "Nifty 100", "Custom"]
+            universe_mode = st.selectbox("Stock Universe", _uni_options, key="sec_universe")
+        with c2:
+            sector_options = ["All sectors"] + nse_master_data.sector_list()
+            sector_filter = st.selectbox("Sector", sector_options, key="sec_sector")
+
+        if universe_mode == "Custom":
+            custom_tickers_raw = st.text_input(
+                "Custom tickers (comma-separated NSE symbols)",
+                value=st.session_state.get("sec_stored_custom_tickers", ""),
+                placeholder="e.g. TCS, WIPRO, INFY",
+                help=f"Max {MAX_CUSTOM_TICKERS} tickers, not saved between sessions. With only a handful "
+                     f"of hand-picked tickers, most sectors will show just 1-2 stocks — check the "
+                     f"'# of stocks' column before reading much into a thin sector's numbers.",
+                key="sec_custom_tickers_input",
+            )
+            st.session_state["sec_stored_custom_tickers"] = custom_tickers_raw
+        else:
+            custom_tickers_raw = ""
+
+        c3, c4 = st.columns(2)
+        with c3:
+            min_avg_return_input = st.number_input(
+                "Min avg 12mo returns % (blank = no filter, all shown)", value=None, step=1.0,
+                key="sec_min_avg_return",
+            )
+        with c4:
+            min_avg_sharpe_input = st.number_input(
+                "Min Sharpe ratio (blank = no filter, all shown)", min_value=-10.0, value=None,
+                step=0.1, key="sec_min_avg_sharpe",
+                help=f"Excludes sectors whose AVERAGE Sharpe ratio is below this. {SHARPE_DEFINITION}",
+            )
+
+        c5, c6 = st.columns(2)
+        with c5:
+            dma_period = st.selectbox(
+                "Price Trend (N-day moving average)", MOMENTUM_DMA_OPTIONS,
+                index=MOMENTUM_DMA_OPTIONS.index(MOMENTUM_DMA_DEFAULT), key="sec_dma",
+                help="Sets N for the 'Stocks > N-day DMA' breadth column only — does not remove any "
+                     "sector row (unlike the same-named control on the Stock Screener tab, where it's an "
+                     "eligibility gate on individual stocks).",
+            )
+        with c6:
+            volume_baseline_days = st.selectbox(
+                "Relative Volume baseline (days)", [30, 50, 90],
+                index=[30, 50, 90].index(MOMENTUM_VOLUME_BASELINE_DAYS_DEFAULT), key="sec_vol_baseline",
+                help=f"Sets the denominator for the 'Avg Relative Volume %' column. The numerator is "
+                     f"fixed at a {MOMENTUM_VOLUME_RECENT_DAYS}-day average volume (not a single day).",
+            )
+
+        run_clicked = st.button("Generate sector view", type="primary", key="sec_generate")
+
+    _handle_generate_click(run_clicked, universe_mode, custom_tickers_raw, key_prefix="sec")
+
+    if not st.session_state.get("sec_has_run"):
+        st.info("Set your filters and click **Generate sector view** to run the screen.")
+        return
+
+    run_inputs = st.session_state["sec_run_inputs"]
+    cache_entry = run_inputs["cache_entry"]
+    price_data, failures = cache_entry["price_data"], cache_entry["failures"]
+    fetched_at = cache_entry["fetched_at"]
+    st.caption(f"Last updated: {fetched_at.strftime('%d %b %Y, %H:%M IST')} · {run_inputs['universe_label']} · "
+               f"{len(price_data)} fetched, {len(failures)} failed")
+    if failures:
+        with st.expander(f"{len(failures)} symbol(s) failed to fetch"):
+            st.dataframe(
+                [{"Symbol": sym, "Error": msg} for sym, msg in failures.items()],
+                use_container_width=True, hide_index=True,
+            )
+    if not price_data:
+        st.error("All fetches failed — nothing to rank. See failures above.")
+        return
+
+    table = build_momentum_table(
+        price_data, dma_period=dma_period, exclude_last_month=False,
+        volume_baseline_days=volume_baseline_days,
+    )
+    sector_table = build_sector_table(table)
+    if sector_table.empty:
+        st.warning("No sector data available — this can happen with a Custom universe whose tickers "
+                   "aren't in the Nifty 500 (no known sector for any of them).")
+        return
+
+    filtered_sector = apply_sector_filters(
+        sector_table, sector=sector_filter,
+        min_avg_return_12mo_pct=min_avg_return_input, min_avg_sharpe_ratio=min_avg_sharpe_input,
+    )
+    if filtered_sector.empty:
+        st.warning("No sectors matched these filters.")
+        return
+    ranked_sector = sort_table(filtered_sector, sort_by="avg_return_12mo_pct")
+
+    def _fmt_count_pct(count, pct) -> str:
+        return f"{int(count)} ({pct:.0f}%)" if pd.notna(pct) else "—"
+
+    display_sector = pd.DataFrame({
+        "Sector": ranked_sector["sector"],
+        "Avg 12mo returns %": ranked_sector["avg_return_12mo_pct"],
+        "Med 12mo returns %": ranked_sector["med_return_12mo_pct"],
+        "Avg 30d returns %": ranked_sector["avg_return_30d_pct"],
+        "Avg 60d returns %": ranked_sector["avg_return_60d_pct"],
+        "Avg 90d returns %": ranked_sector["avg_return_90d_pct"],
+        "Avg 180d returns %": ranked_sector["avg_return_180d_pct"],
+        "Vs universe 12mo returns (pts)": ranked_sector["vs_universe_return_12mo_pct"],
+        "# of stocks": ranked_sector["num_stocks"],
+        "Stocks up (12mo)": [
+            _fmt_count_pct(c, p) for c, p in zip(ranked_sector["stocks_up_12mo_count"], ranked_sector["stocks_up_12mo_pct"])
+        ],
+        f"Stocks > {dma_period}-day DMA": [
+            _fmt_count_pct(c, p) for c, p in zip(ranked_sector["stocks_above_dma_count"], ranked_sector["stocks_above_dma_pct"])
+        ],
+        "Avg Sharpe ratio": ranked_sector["avg_sharpe_ratio"],
+        "Avg Annual traded turnover ₹cr": ranked_sector["avg_annual_traded_turnover_cr"],
+        "Avg Relative Volume %": ranked_sector["avg_relative_volume_pct"],
+    })
+
+    st.dataframe(
+        display_sector, use_container_width=True, hide_index=True,
+        column_config={
+            "Avg 12mo returns %": st.column_config.NumberColumn(
+                help="Equal-weighted mean of each stock's 12mo returns % in this sector — same as holding "
+                     "an equal ₹ amount in every stock in the sector. NOT weighted by market cap.",
+            ),
+            "Med 12mo returns %": st.column_config.NumberColumn(
+                help="The median (typical) stock's 12mo returns % in this sector — less sensitive to a "
+                     "few extreme performers than the average.",
+            ),
+            "Vs universe 12mo returns (pts)": st.column_config.NumberColumn(
+                help="This sector's Avg 12mo returns % minus the average across the WHOLE fetched "
+                     "universe (all sectors combined), in percentage points. Positive = this sector is "
+                     "leading the broader universe; negative = lagging it.",
+            ),
+            "Stocks up (12mo)": st.column_config.TextColumn(
+                help="Count (and %) of stocks in this sector with a positive 12mo return, out of stocks "
+                     "with a computable 12mo return — not out of the sector's total stock count.",
+            ),
+            f"Stocks > {dma_period}-day DMA": st.column_config.TextColumn(
+                help=f"Count (and %) of stocks in this sector currently above their own {dma_period}-day "
+                     f"moving average — a breadth check, since a sector can show a strong average return "
+                     f"carried by just a few names while most of its stocks are actually below trend.",
+            ),
+            "Avg Sharpe ratio": st.column_config.NumberColumn(help=f"Equal-weighted mean per-stock Sharpe ratio in this sector. {SHARPE_DEFINITION}"),
+            "Avg Annual traded turnover ₹cr": st.column_config.NumberColumn(
+                help="Equal-weighted mean of each stock's actual trailing 12-month traded turnover (₹cr) "
+                     "in this sector.",
+            ),
+            "Avg Relative Volume %": st.column_config.NumberColumn(
+                help="Equal-weighted mean of each stock's Relative Volume % in this sector — is trading "
+                     "activity broadly elevated across the sector right now, or just business as usual.",
+            ),
+        },
+    )
+
+
+_tab_screener, _tab_sector, _tab_how = st.tabs(["Screener", "Sector View", "How this works"])
 with _tab_screener:
     _render_screener_tab()
+with _tab_sector:
+    _render_sector_view_tab()
 with _tab_how:
     how_it_works.render_momentum_explainer()

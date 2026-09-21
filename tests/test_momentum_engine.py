@@ -379,6 +379,110 @@ class TestApplyFilters:
         assert set(out["symbol"]) == {"A"}
 
 
+class TestBuildSectorTable:
+    def _sample_table(self):
+        return pd.DataFrame([
+            {"symbol": "A", "sector": "IT", "return_12mo_pct": 20.0, "return_30d_pct": 2.0,
+             "return_60d_pct": 3.0, "return_90d_pct": 4.0, "return_180d_pct": 5.0,
+             "price_above_dma": True, "sharpe_ratio": 1.0, "annual_traded_turnover_cr": 100.0,
+             "volume_participation_pct": 110.0},
+            {"symbol": "B", "sector": "IT", "return_12mo_pct": 40.0, "return_30d_pct": 1.0,
+             "return_60d_pct": 2.0, "return_90d_pct": 3.0, "return_180d_pct": 4.0,
+             "price_above_dma": False, "sharpe_ratio": 2.0, "annual_traded_turnover_cr": 200.0,
+             "volume_participation_pct": 90.0},
+            {"symbol": "C", "sector": "Financial Services", "return_12mo_pct": -10.0,
+             "return_30d_pct": None, "return_60d_pct": None, "return_90d_pct": None,
+             "return_180d_pct": None, "price_above_dma": None, "sharpe_ratio": None,
+             "annual_traded_turnover_cr": None, "volume_participation_pct": None},
+            {"symbol": "D", "sector": None, "return_12mo_pct": 100.0, "return_30d_pct": 10.0,
+             "return_60d_pct": 10.0, "return_90d_pct": 10.0, "return_180d_pct": 10.0,
+             "price_above_dma": True, "sharpe_ratio": 5.0, "annual_traded_turnover_cr": 500.0,
+             "volume_participation_pct": 200.0},
+        ])
+
+    def test_none_sector_excluded_from_rows_but_counted_in_universe_average(self):
+        sec = me.build_sector_table(self._sample_table())
+        assert set(sec["sector"]) == {"IT", "Financial Services"}  # D (sector=None) has no row
+        # Universe avg across ALL 4 rows (including D) = (20+40-10+100)/4 = 37.5
+        it_row = sec[sec["sector"] == "IT"].iloc[0]
+        assert it_row["avg_return_12mo_pct"] == pytest.approx(30.0)  # (20+40)/2
+        assert it_row["vs_universe_return_12mo_pct"] == pytest.approx(30.0 - 37.5)
+
+    def test_median_differs_from_mean_with_skewed_data(self):
+        table = pd.DataFrame([
+            {"symbol": "A", "sector": "IT", "return_12mo_pct": 5.0, "return_30d_pct": None,
+             "return_60d_pct": None, "return_90d_pct": None, "return_180d_pct": None,
+             "price_above_dma": None, "sharpe_ratio": None, "annual_traded_turnover_cr": None,
+             "volume_participation_pct": None},
+            {"symbol": "B", "sector": "IT", "return_12mo_pct": 6.0, "return_30d_pct": None,
+             "return_60d_pct": None, "return_90d_pct": None, "return_180d_pct": None,
+             "price_above_dma": None, "sharpe_ratio": None, "annual_traded_turnover_cr": None,
+             "volume_participation_pct": None},
+            {"symbol": "C", "sector": "IT", "return_12mo_pct": 400.0, "return_30d_pct": None,
+             "return_60d_pct": None, "return_90d_pct": None, "return_180d_pct": None,
+             "price_above_dma": None, "sharpe_ratio": None, "annual_traded_turnover_cr": None,
+             "volume_participation_pct": None},
+        ])
+        sec = me.build_sector_table(table)
+        row = sec.iloc[0]
+        assert row["avg_return_12mo_pct"] == pytest.approx((5 + 6 + 400) / 3)  # skewed by the 400
+        assert row["med_return_12mo_pct"] == pytest.approx(6.0)  # unaffected by the outlier
+
+    def test_breadth_denominator_excludes_missing_values_not_total_stock_count(self):
+        # Financial Services has 1 stock with entirely None trend/volume
+        # metrics -> the DMA breadth denominator should be 0/None, not
+        # "0 out of 1" silently counted as 0%.
+        sec = me.build_sector_table(self._sample_table())
+        fs_row = sec[sec["sector"] == "Financial Services"].iloc[0]
+        assert pd.isna(fs_row["stocks_above_dma_pct"])  # price_above_dma is None -> no valid denominator
+        # return_12mo_pct IS populated for this stock (-10.0), so the "up"
+        # breadth denominator is valid (1 stock, not up since -10 < 0).
+        assert fs_row["stocks_up_12mo_pct"] == 0.0
+
+    def test_num_stocks_reflects_full_sector_membership(self):
+        sec = me.build_sector_table(self._sample_table())
+        it_row = sec[sec["sector"] == "IT"].iloc[0]
+        assert it_row["num_stocks"] == 2
+
+    def test_empty_table_returns_empty_dataframe(self):
+        assert me.build_sector_table(pd.DataFrame()).empty
+
+    def test_all_none_sector_returns_empty_dataframe(self):
+        table = pd.DataFrame([{"symbol": "X", "sector": None, "return_12mo_pct": 10.0}])
+        assert me.build_sector_table(table).empty
+
+
+class TestApplySectorFilters:
+    def _sample_sector_table(self):
+        return pd.DataFrame([
+            {"sector": "IT", "avg_return_12mo_pct": 30.0, "avg_sharpe_ratio": 1.5},
+            {"sector": "Financial Services", "avg_return_12mo_pct": -10.0, "avg_sharpe_ratio": None},
+            {"sector": "Healthcare", "avg_return_12mo_pct": 15.0, "avg_sharpe_ratio": 0.8},
+        ])
+
+    def test_sector_filter(self):
+        out = me.apply_sector_filters(self._sample_sector_table(), sector="IT")
+        assert set(out["sector"]) == {"IT"}
+
+    def test_all_sectors_means_no_filter(self):
+        out = me.apply_sector_filters(self._sample_sector_table(), sector="All sectors")
+        assert len(out) == 3
+
+    def test_min_avg_return_excludes_below_threshold(self):
+        out = me.apply_sector_filters(self._sample_sector_table(), min_avg_return_12mo_pct=0.0)
+        assert set(out["sector"]) == {"IT", "Healthcare"}
+
+    def test_min_avg_sharpe_excludes_below_and_none(self):
+        out = me.apply_sector_filters(self._sample_sector_table(), min_avg_sharpe_ratio=1.0)
+        assert set(out["sector"]) == {"IT"}  # Healthcare (0.8) below, Financial Services (None) excluded
+
+    def test_none_thresholds_mean_no_filter(self):
+        out = me.apply_sector_filters(
+            self._sample_sector_table(), min_avg_return_12mo_pct=None, min_avg_sharpe_ratio=None,
+        )
+        assert len(out) == 3
+
+
 class TestSortTable:
     def test_default_sort_descending(self):
         df = pd.DataFrame([

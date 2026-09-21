@@ -257,7 +257,48 @@ click-to-sort — no separate sort control needed.
 
 - Click any row to expand a candlestick + volume chart for that stock,
   for visual context only — it isn't part of the ranking or filtering
-  logic.
+  logic. (Sector View has no drill-down — there's no single time series
+  to chart for a sector.)
+
+---
+
+## Sector View
+
+- A second tab: same fetched data, aggregated to one row per sector
+  instead of one row per stock — "which sectors are leading or lagging,
+  and is that broad-based or a few names carrying it."
+- **All sector figures are EQUAL-WEIGHTED** — a plain average across the
+  sector's stocks, the same as holding an equal ₹ amount in every stock
+  in that sector. **Not weighted by market cap.** A cap-weighted version
+  (closer to how a real sector index behaves) would need a separate
+  market-cap fetch and is deliberately not built — see "What this tool
+  does NOT do" below.
+- Computed over the FULL fetched universe, before this tab's own
+  filters are applied — same principle as the stock-level sector
+  columns above, so a sector's numbers reflect the sector as a whole.
+- **Avg / Med 12mo returns %** — mean and median 12mo return across the
+  sector's stocks. They answer different questions: the average is
+  what an equal-weighted basket of the sector would have returned; the
+  median is what the *typical* stock did, less swayed by a few extreme
+  performers. Only %-based versions are shown — averaging raw ₹ returns
+  across stocks trading at very different price levels isn't a fair
+  comparison, so that version was deliberately left out.
+- **Vs universe 12mo returns (pts)** — this sector's average 12mo
+  return minus the average across the whole fetched universe (every
+  sector combined), in percentage points.
+- **Stocks up (12mo)** and **Stocks > N-day DMA** — breadth: how many
+  of the sector's stocks are actually participating, not just the
+  average. A sector can show a strong average return carried by a
+  handful of big movers while most of its stocks lag — these two
+  columns are how you'd catch that. Both shown as "count (%)", and the
+  % is of stocks with a computable value for that metric, not the
+  sector's total stock count.
+- **Avg Sharpe ratio, Avg Annual traded turnover, Avg Relative Volume %**
+  — the equal-weighted mean of the same per-stock columns from the
+  Screener tab, one level up.
+- Custom universes with only a few hand-picked tickers will show most
+  sectors with just 1-2 stocks — check "# of stocks" before reading
+  much into a thin sector's numbers.
 
 ---
 
@@ -267,6 +308,16 @@ click-to-sort — no separate sort control needed.
   you, there's no single blended "momentum score." Sector-relative
   momentum (Vs sector 12mo returns) is shown as its own column rather
   than folded into a single score, same reasoning.
+- No cap-weighted sector averages — Sector View is equal-weighted only
+  (see above). Cap-weighting would need a separate market-cap fetch
+  (yfinance's `.info`/`fast_info`, not part of the OHLCV history
+  already being pulled) — feasible, but a meaningfully slower and less
+  reliable call at full-universe scale, so deferred rather than bundled
+  in silently.
+- No cross-sectional dispersion measure (how spread out returns are
+  *across* a sector's stocks at a point in time, as opposed to one
+  stock's own volatility over time) — considered, deferred.
+- No drill-down from a sector row into its constituent stocks yet.
 - No ASM/GSM/surveillance-list exclusion yet — a stock under exchange
   surveillance can still appear here. Cross-check manually for now:
     - ASM list: [nseindia.com/reports/asm](https://www.nseindia.com/reports/asm) (Download CSV button)
