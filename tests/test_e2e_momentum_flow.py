@@ -70,6 +70,13 @@ def test_five_real_symbols_full_pipeline(make_ohlcv, monkeypatch):
     assert table["week_52_high"].notna().all()
     assert table["dma_value"].notna().all()  # 300 days of synthetic data comfortably covers a 90-day DMA
     # volatility_pct column removed (redundant with Sharpe ratio) — see momentum_engine.py
+    assert table["stdev_return_252d_pct"].notna().all()
+    assert table["ulcer_index_252d"].notna().all()
+    assert (table["ulcer_index_252d"] >= 0).all()  # always non-negative by construction
+    assert table["max_drawdown_252d_pct"].notna().all()
+    assert (table["max_drawdown_252d_pct"] <= 0).all()  # a drawdown is never positive
+    assert table["rsq"].notna().all()
+    assert ((table["rsq"] >= 0) & (table["rsq"] <= 1)).all()
     # Relative-momentum columns present and internally consistent
     assert table["sector_avg_return_12mo_pct"].notna().all()
     for _, row in table.iterrows():
@@ -97,12 +104,14 @@ def test_five_real_symbols_full_pipeline(make_ohlcv, monkeypatch):
     assert ranked.iloc[0]["symbol"] == "TCS"
 
     # --- Step 5: assemble the display DataFrame exactly as the page does ---
+    rsq_label = f"RSQ ({config.MOMENTUM_DMA_DEFAULT}d)"
     display_cols = [
         "symbol", "sector", "current_price", "week_52_high", "dma_value",
         "return_12mo_abs", "return_12mo_pct",
         "sector_avg_return_12mo_pct", "relative_to_sector_return_12mo_pct",
     ] + [f"return_{w}d_pct" for w in config.MOMENTUM_RETURN_WINDOWS] + [
-        "sharpe_ratio", "hit_rate_pct",
+        "sharpe_ratio", "stdev_return_252d_pct", "ulcer_index_252d", "max_drawdown_252d_pct", "rsq",
+        "hit_rate_pct",
         "volume_participation_pct", "annual_traded_turnover_cr", "listing_date",
     ]
     display_df = ranked[display_cols].rename(columns={
@@ -113,7 +122,12 @@ def test_five_real_symbols_full_pipeline(make_ohlcv, monkeypatch):
         "relative_to_sector_return_12mo_pct": "Vs sector 12mo returns (pts)",
         "return_12mo_abs": "12mo returns ₹", "return_12mo_pct": "12mo returns %",
         **{f"return_{w}d_pct": f"{w}d returns %" for w in config.MOMENTUM_RETURN_WINDOWS},
-        "sharpe_ratio": "Sharpe ratio", "hit_rate_pct": "Hit rate %",
+        "sharpe_ratio": "Sharpe ratio",
+        "stdev_return_252d_pct": "Stdev of returns % (252d)",
+        "ulcer_index_252d": "Ulcer Index (252d)",
+        "max_drawdown_252d_pct": "1Y Max Drawdown %",
+        "rsq": rsq_label,
+        "hit_rate_pct": "Hit rate %",
         "volume_participation_pct": "Relative Volume %", "annual_traded_turnover_cr": "Annual traded turnover ₹cr",
         "listing_date": "Listing date",
     })
@@ -121,7 +135,8 @@ def test_five_real_symbols_full_pipeline(make_ohlcv, monkeypatch):
         "Stock", "Sector", "Last closed price ₹", "52-week high ₹", f"{config.MOMENTUM_DMA_DEFAULT}-day DMA ₹",
         "12mo returns ₹", "12mo returns %", "Sector avg 12mo returns %", "Vs sector 12mo returns (pts)",
         "30d returns %", "60d returns %", "90d returns %", "180d returns %",
-        "Sharpe ratio", "Hit rate %", "Relative Volume %", "Annual traded turnover ₹cr",
+        "Sharpe ratio", "Stdev of returns % (252d)", "Ulcer Index (252d)", "1Y Max Drawdown %", rsq_label,
+        "Hit rate %", "Relative Volume %", "Annual traded turnover ₹cr",
         "Listing date",
     ]
     assert len(display_df) == 4

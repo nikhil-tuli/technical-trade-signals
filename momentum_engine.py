@@ -63,6 +63,105 @@ def _window_slice(df: pd.DataFrame, trading_days: int, exclude_last_month: bool 
     return sliced
 
 
+def _fixed_window(df: pd.DataFrame, needed_closes: int) -> pd.DataFrame:
+    """
+    Same coverage guard as _window_slice, but WITHOUT the
+    exclude_last_month adjustment — for the risk/quality metrics below
+    (stdev of returns, Ulcer Index, Max Drawdown), which are always
+    measured over their own fixed window, independent of the 12mo
+    return's "exclude last month" toggle (that toggle is specific to
+    the momentum-return figures, not these).
+    """
+    sliced = df.tail(needed_closes)
+    if len(sliced) < needed_closes * MIN_WINDOW_COVERAGE:
+        return sliced.iloc[0:0]
+    return sliced
+
+
+def stdev_return_252d_pct(df: pd.DataFrame, trading_days: int = 252) -> float | None:
+    """
+    Standard deviation of day-to-day % returns over a FIXED trailing
+    252-trading-day window — always this window, regardless of the
+    "Exclude last month" toggle (deliberately not tied to it, unlike
+    the 12mo return figures). Needs trading_days+1 closes to produce
+    trading_days daily-return observations, same convention as the
+    return-window functions above.
+    """
+    sliced = _fixed_window(df, trading_days + 1)
+    if sliced.empty:
+        return None
+    daily_returns = sliced["Close"].pct_change().dropna()
+    if daily_returns.empty:
+        return None
+    std = daily_returns.std()
+    if std is None or np.isnan(std):
+        return None
+    return round(float(std) * 100, 2)
+
+
+def ulcer_index_252d(df: pd.DataFrame, trading_days: int = 252) -> float | None:
+    """
+    Ulcer Index (Peter Martin) over a fixed trailing 252-trading-day
+    window: for each day, the % drawdown from the running max Close
+    WITHIN that window, squared, averaged, then square-rooted. Captures
+    depth AND duration of declines — a slow grinding slide shows a high
+    Ulcer Index even with low day-to-day volatility, which stdev alone
+    wouldn't catch.
+    """
+    sliced = _fixed_window(df, trading_days)
+    if sliced.empty:
+        return None
+    closes = sliced["Close"]
+    running_max = closes.cummax()
+    drawdown_pct = (closes - running_max) / running_max * 100  # <= 0 at every point
+    ulcer = np.sqrt((drawdown_pct ** 2).mean())
+    return round(float(ulcer), 2) if not np.isnan(ulcer) else None
+
+
+def max_drawdown_252d_pct(df: pd.DataFrame, trading_days: int = 252) -> float | None:
+    """
+    The single largest peak-to-trough % decline over the trailing 252
+    trading days ("1Y Max Drawdown"). Returned as a NEGATIVE number
+    (e.g. -35.2), matching standard convention — a smaller-magnitude
+    (closer to 0) drawdown is 'better'.
+    """
+    sliced = _fixed_window(df, trading_days)
+    if sliced.empty:
+        return None
+    closes = sliced["Close"]
+    running_max = closes.cummax()
+    drawdown_pct = (closes - running_max) / running_max * 100
+    max_dd = drawdown_pct.min()
+    return round(float(max_dd), 2) if not pd.isna(max_dd) else None
+
+
+def rsq(df: pd.DataFrame, window_days: int) -> float | None:
+    """
+    R-squared of a linear regression of log(Close) against a simple
+    time index (0, 1, 2, ...) over the trailing `window_days` — a
+    trend-QUALITY measure: closer to 1.0 means a smooth, consistent
+    trend; closer to 0 means a choppy, directionless price path over
+    that window. Uses log(Close), not raw Close, so a smooth
+    EXPONENTIAL uptrend (the normal shape of a compounding move) isn't
+    penalized against a straight-line fit the way it would be on raw
+    price. window_days is the SAME N as the DMA trend filter — this is
+    deliberate (see the "N-day lookback" filter's tooltip), not a
+    separate lookback of its own.
+    """
+    sliced = _fixed_window(df, window_days)
+    if sliced.empty or len(sliced) < 3:
+        return None
+    closes = sliced["Close"].values
+    if np.any(closes <= 0):
+        return None  # log undefined for non-positive prices — shouldn't occur, but guard anyway
+    y = np.log(closes)
+    x = np.arange(len(y))
+    corr = np.corrcoef(x, y)[0, 1]
+    if np.isnan(corr):
+        return None
+    return round(float(corr) ** 2, 3)
+
+
 def price_points(df: pd.DataFrame, exclude_last_month: bool = False) -> dict:
     """
     Returns the actual (price, date) pairs behind the returns columns —
@@ -302,6 +401,10 @@ def compute_symbol_metrics(symbol: str, df: pd.DataFrame, dma_period: int,
     row["return_12mo_abs"] = abs_change
     row["return_12mo_pct"] = pct_change
     row["sharpe_ratio"] = sharpe_ratio(df, exclude_last_month=exclude_last_month)
+    row["stdev_return_252d_pct"] = stdev_return_252d_pct(df)
+    row["ulcer_index_252d"] = ulcer_index_252d(df)
+    row["max_drawdown_252d_pct"] = max_drawdown_252d_pct(df)
+    row["rsq"] = rsq(df, window_days=dma_period)
     # row["volatility_pct"] = volatility_pct(df, exclude_last_month=exclude_last_month)  # DISABLED, see comment above
     row["hit_rate_pct"] = hit_rate_pct(df, exclude_last_month=exclude_last_month)
     row["current_price"] = current_price(df)

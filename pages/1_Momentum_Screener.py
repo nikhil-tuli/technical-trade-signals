@@ -205,8 +205,10 @@ def _render_screener_tab():
             )
         with c4:
             dma_period = st.selectbox(
-                "Price Trend - Last closed price > N-day moving average", MOMENTUM_DMA_OPTIONS,
+                "N-day lookback — DMA trend filter & RSQ", MOMENTUM_DMA_OPTIONS,
                 index=MOMENTUM_DMA_OPTIONS.index(MOMENTUM_DMA_DEFAULT), key="mom_dma",
+                help="Sets N for two things: the moving-average trend filter (Price > N-day DMA) and the "
+                     "R² trend-quality window (RSQ, calculated over the same N days).",
             )
 
         if universe_mode == "Custom":
@@ -347,6 +349,7 @@ def _render_screener_tab():
     vol_pct_label = "Relative Volume %"
     turnover_label = "Annual traded turnover ₹cr"
     dma_label = f"{dma_period}-day DMA ₹"
+    rsq_label = f"RSQ ({dma_period}d)"
     return_pct_labels = {w: f"{w}d returns %" for w in MOMENTUM_RETURN_WINDOWS}
 
     display_cols = [
@@ -354,7 +357,8 @@ def _render_screener_tab():
         "return_12mo_abs", "return_12mo_pct",
         "sector_avg_return_12mo_pct", "relative_to_sector_return_12mo_pct",
     ] + [f"return_{w}d_pct" for w in MOMENTUM_RETURN_WINDOWS] + [
-        "sharpe_ratio", "hit_rate_pct",
+        "sharpe_ratio", "stdev_return_252d_pct", "ulcer_index_252d", "max_drawdown_252d_pct", "rsq",
+        "hit_rate_pct",
         "volume_participation_pct", "annual_traded_turnover_cr", "listing_date",
     ]
     column_rename = {
@@ -364,7 +368,12 @@ def _render_screener_tab():
         "relative_to_sector_return_12mo_pct": "Vs sector 12mo returns (pts)",
         **{f"return_{w}d_pct": lbl for w, lbl in return_pct_labels.items()},
         "return_12mo_abs": "12mo returns ₹", "return_12mo_pct": "12mo returns %",
-        "sharpe_ratio": "Sharpe ratio", "hit_rate_pct": "Hit rate %",
+        "sharpe_ratio": "Sharpe ratio",
+        "stdev_return_252d_pct": "Stdev of returns % (252d)",
+        "ulcer_index_252d": "Ulcer Index (252d)",
+        "max_drawdown_252d_pct": "1Y Max Drawdown %",
+        "rsq": rsq_label,
+        "hit_rate_pct": "Hit rate %",
         "volume_participation_pct": vol_pct_label, "annual_traded_turnover_cr": turnover_label,
         "listing_date": "Listing date",
     }
@@ -382,8 +391,8 @@ def _render_screener_tab():
                  "effectively an all-time high in that case, not a true 52-week figure.",
         ),
         dma_label: st.column_config.NumberColumn(
-            help=f"The {dma_period}-day simple moving average of Close price — the same period selected "
-                 f"in the 'Price Trend' control above. Every row in this table already has last closed "
+            help=f"The {dma_period}-day simple moving average of Close price — the same N selected "
+                 f"in the 'N-day lookback' control above. Every row in this table already has last closed "
                  f"price above this value, since the trend filter is applied before ranking.",
         ),
         "12mo returns ₹": st.column_config.NumberColumn(
@@ -405,6 +414,26 @@ def _render_screener_tab():
                  "whether it's up in absolute terms.",
         ),
         "Sharpe ratio": st.column_config.NumberColumn(help=SHARPE_DEFINITION),
+        "Stdev of returns % (252d)": st.column_config.NumberColumn(
+            help="Standard deviation of day-to-day % returns over a FIXED trailing 252-trading-day "
+                 "window — always this window, unaffected by the 'Exclude last month' toggle above.",
+        ),
+        "Ulcer Index (252d)": st.column_config.NumberColumn(
+            help="Measures depth AND duration of declines over the trailing 252 trading days — each "
+                 "day's % drawdown from its running high, squared, averaged, then square-rooted. A slow "
+                 "grinding slide scores high here even with low day-to-day volatility, which Stdev alone "
+                 "wouldn't catch. Lower is better (0 = no drawdown at all in the window).",
+        ),
+        "1Y Max Drawdown %": st.column_config.NumberColumn(
+            help="The single largest peak-to-trough % decline over the trailing 252 trading days. Shown "
+                 "as a negative number — closer to 0 is better.",
+        ),
+        rsq_label: st.column_config.NumberColumn(
+            help=f"R² (0 to 1) of a linear regression of log(price) against time, over the same "
+                 f"{dma_period}-day window as the 'N-day lookback' filter above. Higher = a smoother, "
+                 f"more consistent trend; lower = choppier, less directional. This is trend QUALITY, not "
+                 f"trend direction or size — a smooth downtrend and a smooth uptrend can both score high.",
+        ),
         "Hit rate %": st.column_config.NumberColumn(
             help=f"% of trading days in the trailing {MOMENTUM_LOOKBACK_MONTHS}-month window{exclude_note} "
                  f"that closed higher than the day before.",

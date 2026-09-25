@@ -217,6 +217,112 @@ class TestAnnualTradedTurnover:
 #         assert me.volatility_pct(df) is None
 
 
+class TestStdevReturn252d:
+    def test_flat_series_gives_zero(self, make_ohlcv):
+        df = make_ohlcv(n_days=280, seed=60)
+        df["Close"] = 100.0
+        assert me.stdev_return_252d_pct(df) == pytest.approx(0.0)
+
+    def test_matches_manual_calculation(self):
+        closes = [100, 102, 99, 103, 101, 104, 98, 105, 100, 106]
+        df = pd.DataFrame({
+            "Close": closes, "Open": closes, "High": closes, "Low": closes,
+            "Volume": [1000] * len(closes),
+        }, index=pd.bdate_range("2024-01-01", periods=len(closes)))
+        expected = pd.Series(closes).pct_change().dropna().std() * 100
+        assert me.stdev_return_252d_pct(df, trading_days=len(closes) - 1) == pytest.approx(expected, abs=0.01)
+
+    def test_insufficient_data_returns_none(self, make_ohlcv):
+        df = make_ohlcv(n_days=5, seed=61)
+        assert me.stdev_return_252d_pct(df) is None
+
+    def test_not_affected_by_exclude_last_month(self, make_ohlcv):
+        # Unlike the 12mo return figures, this is a fixed 252-day window
+        # regardless of the "Exclude last month" toggle — confirming
+        # there's no such parameter to even pass differs it from
+        # sharpe_ratio/lookback_return_pct, which do take one.
+        import inspect
+        params = inspect.signature(me.stdev_return_252d_pct).parameters
+        assert "exclude_last_month" not in params
+
+
+class TestUlcerIndex252d:
+    def test_known_drawdown(self):
+        closes = [100.0] * 100 + [80.0] * 152
+        df = pd.DataFrame({
+            "Close": closes, "Open": closes, "High": closes, "Low": closes,
+            "Volume": [1000] * 252,
+        }, index=pd.bdate_range("2024-01-01", periods=252))
+        ui = me.ulcer_index_252d(df)
+        assert ui is not None
+        assert 0 < ui <= 20  # bounded by the max drawdown magnitude (20%)
+
+    def test_no_drawdown_gives_zero(self):
+        closes = list(range(100, 100 + 252))  # strictly increasing -> never below running max
+        df = pd.DataFrame({
+            "Close": closes, "Open": closes, "High": closes, "Low": closes,
+            "Volume": [1000] * 252,
+        }, index=pd.bdate_range("2024-01-01", periods=252))
+        assert me.ulcer_index_252d(df) == pytest.approx(0.0)
+
+    def test_insufficient_data_returns_none(self, make_ohlcv):
+        df = make_ohlcv(n_days=10, seed=62)
+        assert me.ulcer_index_252d(df) is None
+
+
+class TestMaxDrawdown252d:
+    def test_known_drawdown_is_negative(self):
+        closes = [100.0] * 100 + [80.0] * 152  # exactly a -20% drawdown
+        df = pd.DataFrame({
+            "Close": closes, "Open": closes, "High": closes, "Low": closes,
+            "Volume": [1000] * 252,
+        }, index=pd.bdate_range("2024-01-01", periods=252))
+        assert me.max_drawdown_252d_pct(df) == pytest.approx(-20.0)
+
+    def test_no_drawdown_gives_zero_not_positive(self):
+        closes = list(range(100, 100 + 252))
+        df = pd.DataFrame({
+            "Close": closes, "Open": closes, "High": closes, "Low": closes,
+            "Volume": [1000] * 252,
+        }, index=pd.bdate_range("2024-01-01", periods=252))
+        assert me.max_drawdown_252d_pct(df) == pytest.approx(0.0)
+
+    def test_insufficient_data_returns_none(self, make_ohlcv):
+        df = make_ohlcv(n_days=10, seed=63)
+        assert me.max_drawdown_252d_pct(df) is None
+
+
+class TestRsq:
+    def test_perfect_exponential_trend_near_one(self):
+        n = 200
+        closes = [100.0 * (1.01 ** i) for i in range(n)]
+        df = pd.DataFrame({
+            "Close": closes, "Open": closes, "High": closes, "Low": closes,
+            "Volume": [1000] * n,
+        }, index=pd.bdate_range("2024-01-01", periods=n))
+        assert me.rsq(df, window_days=n) == pytest.approx(1.0, abs=0.001)
+
+    def test_uses_the_passed_window_days_not_a_fixed_252(self, make_ohlcv):
+        # Confirms RSQ's window is the caller-supplied N (the shared
+        # DMA/lookback filter value), not hardcoded to 252 like the
+        # other three metrics above.
+        df = make_ohlcv(n_days=280, daily_drift_pct=0.2, seed=64)
+        r_90 = me.rsq(df, window_days=90)
+        r_180 = me.rsq(df, window_days=180)
+        assert r_90 is not None and r_180 is not None
+        assert r_90 != r_180  # different windows over noisy data -> different R²
+
+    def test_insufficient_data_returns_none(self, make_ohlcv):
+        df = make_ohlcv(n_days=5, seed=65)
+        assert me.rsq(df, window_days=90) is None
+
+    def test_bounded_between_zero_and_one(self, make_ohlcv):
+        df = make_ohlcv(n_days=280, daily_drift_pct=0.15, seed=66)
+        r = me.rsq(df, window_days=90)
+        assert r is not None
+        assert 0.0 <= r <= 1.0
+
+
 class TestWeek52High:
     def test_known_high(self):
         closes = [100, 150, 120, 90, 110]
@@ -520,7 +626,8 @@ class TestBuildMomentumTable:
         expected = {
             "symbol", "return_30d_pct", "return_60d_pct", "return_90d_pct",
             "return_180d_pct", "return_12mo_abs", "return_12mo_pct",
-            "sharpe_ratio", "hit_rate_pct",
+            "sharpe_ratio", "stdev_return_252d_pct", "ulcer_index_252d", "max_drawdown_252d_pct", "rsq",
+            "hit_rate_pct",
             "current_price", "week_52_high", "dma_value", "price_above_dma",
             "volume_participation_pct", "annual_traded_turnover_cr", "sector", "days_listed", "listing_date",
             "sector_avg_return_12mo_pct", "relative_to_sector_return_12mo_pct",

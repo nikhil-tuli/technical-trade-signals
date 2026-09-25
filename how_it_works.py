@@ -21,6 +21,8 @@ from config import (
     MOMENTUM_MIN_LISTING_MONTHS_DEFAULT,
     MOMENTUM_LOOKBACK_MONTHS,
     MOMENTUM_MASTER_DATA_ASOF,
+    MOMENTUM_RISK_FREE_RATE_PCT,
+    MOMENTUM_RISK_FREE_RATE_ASOF,
     MAX_CUSTOM_TICKERS,
 )
 
@@ -176,40 +178,50 @@ def render_momentum_explainer():
   lagging its peers" question, separate from whether it's up in
   absolute terms. Blank for Custom tickers with no known sector.
 - **N-day returns** — % change in close price over the trailing 30 / 60
-  / 90 / 180 / 252 trading days. Shown side by side so you can see
-  whether a move is accelerating or fading.
-- **Volatility %** — the standard deviation of **day-to-day % price
-  changes** over the trailing {MOMENTUM_LOOKBACK_MONTHS}-month window (not annualized — the
-  raw daily std dev over that window, not scaled by √252 the way
-  "annualized volatility" usually is). Shown on its own so you can judge
-  "how choppy" in its own right and set the Max volatility % filter with
-  a real number in mind. Ret/vol below uses an annualized version of
-  this same figure, not this raw number, so the two won't look like a
-  simple ratio of each other at a glance.
-- **Return/volatility ratio (Ret/vol)** — 12-month return % ÷
-  *annualized* volatility (Volatility % scaled up to a yearly figure).
-  Annualizing the denominator puts this on the same scale as a standard
-  Sharpe-style ratio, so familiar rules of thumb apply directly: below
-  ~0.5 is weak, ~1.0 is decent, ~1.5-2.0 is good, above ~2.0 is strong.
-  Treat these as a rough compass, not a hard cutoff — comparing stocks
-  within this table against each other is more reliable than comparing
-  any single stock against these bands in isolation. It answers "how
-  bumpy was the ride to get this return" — a stock that moved steadily
-  up every day scores higher than one that reached the same return
-  through sharp swings up and down.
+  / 90 / 180 trading days. Shown side by side so you can see whether a
+  move is accelerating or fading. (A 252-day version was dropped — it's
+  numerically identical to 12-month returns whenever "exclude last
+  month" is off, so it was a redundant column.)
+- **Sharpe ratio** — (12-month return % − risk-free rate) ÷ annualized
+  volatility. Risk-free rate assumed: {MOMENTUM_RISK_FREE_RATE_PCT:g}% (≈India's 91-day T-bill, as of
+  {MOMENTUM_RISK_FREE_RATE_ASOF} — a manually-set value, not fetched live). Rough compass:
+  below ~0.5 is weak, ~1.0 is decent, ~1.5-2.0 is good, above ~2.0 is
+  strong — not a hard rule, comparing stocks within this table matters
+  more than comparing any single one against these bands in isolation.
+- **Stdev of returns % (252d)** — standard deviation of day-to-day %
+  price changes over a FIXED trailing 252-trading-day window — always
+  this window, unaffected by the "exclude last month" toggle (that
+  toggle only shifts the 12-month return figures, not this).
+- **Ulcer Index (252d)** — captures depth AND duration of declines over
+  the trailing 252 days, not just how big the swings are: each day's %
+  drawdown from its own running high, squared, averaged, then
+  square-rooted. A slow grinding slide scores high here even with low
+  day-to-day volatility, which Stdev of returns alone wouldn't catch.
+  Lower is better; 0 means no drawdown at all in the window.
+- **1Y Max Drawdown %** — the single largest peak-to-trough decline over
+  the trailing 252 trading days, shown as a negative number (closer to
+  0 is better).
+- **RSQ** — R² (0 to 1) of a linear regression of log(price) against
+  time, over the SAME N-day window as the "N-day lookback" filter below
+  (the column header updates to show whichever N you've picked). Higher
+  = a smoother, more consistent trend; lower = choppier, less
+  directional. This is trend QUALITY, not direction or size — a smooth
+  downtrend and a smooth uptrend can both score high.
 - **Hit rate** — % of trading days in the 12-month window that closed
   higher than the day before. A simple, intuitive read on consistency.
-- **Volume participation** — the last {MOMENTUM_VOLUME_RECENT_DAYS}-day average volume as a % of
+- **Relative Volume %** — the last {MOMENTUM_VOLUME_RECENT_DAYS}-day AVERAGE volume as a % of
   the {MOMENTUM_VOLUME_BASELINE_DAYS_DEFAULT}-day average (both configurable — the column header updates
-  to show whichever baseline you've picked). Above 100% means
-  recent trading activity is running above the stock's own norm; below
-  100% means it's quieter than usual. Shown for context — it does not
-  filter the table.
-- **Avg daily turnover ₹cr ({MOMENTUM_LIQUIDITY_LOOKBACK_DAYS}d)** — average of (Close price × Volume)
-  over the trailing {MOMENTUM_LIQUIDITY_LOOKBACK_DAYS} trading days, in ₹ crore — this is the
-  actual rupee value traded per day on average, not just share count,
-  so it captures both price and volume together. Same figure the Min
-  avg daily turnover filter checks against.
+  to show whichever baseline you've picked). The numerator is
+  deliberately a {MOMENTUM_VOLUME_RECENT_DAYS}-day average, not a single day's volume, so this is a
+  smoothed version of the "Relative Volume" concept traders commonly
+  use, not a literal today-vs-average snapshot. Above 100% means recent
+  activity is running above the stock's own norm; below 100% means it's
+  quieter than usual. Shown for context — it does not filter the table.
+- **Annual traded turnover ₹cr** — the ACTUAL trailing {MOMENTUM_LIQUIDITY_LOOKBACK_DAYS}-trading-day
+  SUM (not average) of daily traded value (Close price × Volume), in
+  ₹ crore — a real year of turnover, not a projection from a shorter
+  window. Same figure the Min annual traded turnover filter checks
+  against.
 - **Listing date** — when the stock started trading, shown as the last
   column for reference alongside the listing-period filter below. From
   NSE data manually fetched on {MOMENTUM_MASTER_DATA_ASOF} — not live.
@@ -227,29 +239,36 @@ click-to-sort — no separate sort control needed.
   fetched fresh rather than using the shared daily cache). Sector and
   Listing period filters are unavailable for Custom, since that
   reference data only covers the Nifty 500 universe.
-- **Trend** — price must be above its N-day moving average (you pick the
-  period: 30/60/90/180/252, default {MOMENTUM_DMA_DEFAULT}-day). This is a single
-  condition — no slope check, unlike the Signal Screener's Primary Trend.
-  The actual price and DMA value used are visible as columns in the table.
+- **N-day lookback — DMA trend filter & RSQ** — sets N for two things
+  at once: the moving-average trend filter (price must be above its
+  N-day DMA — a single condition, no slope check, unlike the Signal
+  Screener's Primary Trend) AND the RSQ trend-quality column's
+  regression window above. Options: 30/60/90/180/252, default {MOMENTUM_DMA_DEFAULT}-day.
+  The actual price, DMA value, and RSQ used are all visible as columns
+  in the table.
 - **Sector** — NSE's sector classification, from the dropdown.
 - **Listing period** — minimum months since the stock listed (default {MOMENTUM_MIN_LISTING_MONTHS_DEFAULT}
   months) — filters out very recently listed names prone to IPO-pop
   volatility. The actual listing date is shown in the table, sourced
   from NSE data manually fetched on {MOMENTUM_MASTER_DATA_ASOF} (not live).
-- **Min avg daily turnover ₹cr ({MOMENTUM_LIQUIDITY_LOOKBACK_DAYS}d)** — an eligibility gate: a stock
+- **Min annual traded turnover ₹cr** — an eligibility gate: a stock
   below this simply doesn't appear, regardless of how strong its
   momentum looks — the concern is whether you could actually trade it
-  at size, not whether the number is impressive. Same wording as the
-  matching table column, just with a "Min" threshold applied.
-- **Min price ₹** — excludes anything below the price you set. Default 0
-  = disabled, every stock shown regardless of price.
-- **Max volatility % (12mo)** — caps how choppy a stock's daily returns
-  can be over the trailing 12 months, using the same Volatility %
-  definition as the column above. Default 0 = disabled, no cap. Set this
-  using the actual Volatility % values you see in the table as a guide.
-- **Volume baseline (N, days)** — sets N in the "{MOMENTUM_VOLUME_RECENT_DAYS}-day volume as % of
-  N-day volume" column above — doesn't filter anything itself, just
-  changes what that column measures against.
+  at size, not whether the number is impressive. Same wording and
+  methodology as the matching table column, just with a "Min" threshold
+  applied.
+- **Min last closed price ₹** — excludes anything below the price you
+  set. Blank = disabled, every stock shown regardless of price.
+- **Min Sharpe ratio** — excludes stocks below this Sharpe ratio (see
+  the column above for the exact formula and the assumed risk-free
+  rate). Blank = disabled. Note: since blank is how this filter is
+  disabled, a threshold of exactly 0.0 (return exactly matching the
+  risk-free rate) IS still settable — type 0 explicitly rather than
+  leaving the box empty.
+- **Relative Volume baseline (days)** — sets the denominator (N-day
+  average volume) for the "Relative Volume %" column above — doesn't
+  filter anything itself, just changes what that column measures
+  against. The numerator stays fixed at a {MOMENTUM_VOLUME_RECENT_DAYS}-day average.
 
 ---
 
