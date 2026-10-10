@@ -133,10 +133,9 @@ def _render_scanner():
     s = st.session_state["algo_state"]
     results, df = s["results"], st.session_state["algo_table_df"]
 
-    m1, m2, m3 = st.columns(3)
+    m1, m2 = st.columns(2)
     m1.metric("Triggered breakouts", len(results))
     m2.metric("Stocks scanned", s["scanned"])
-    m3.metric("Live ticks", "Not enabled", help="Results use completed daily candles only.")
     st.caption(f"{s['label']} · data as of {_fmt_date(s['data_asof'])} · fetched "
                f"{s['fetched_at'].strftime('%d-%m-%Y %H:%M')} IST")
 

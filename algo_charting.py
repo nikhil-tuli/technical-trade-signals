@@ -38,7 +38,8 @@ def build_algo_chart(result: dict, window: int = ALGO_CHART_WINDOW, height: int 
     x0, x1 = int(d["i"].iloc[0]) - 1, int(d["i"].iloc[-1]) + 1
     labels = list(d["date"])
     label_expr = f"datum.value >= {start} && datum.value - {start} < {len(labels)} ? {labels!r}[datum.value - {start}] : ''"
-    x = alt.X("i:Q", scale=alt.Scale(domain=[x0, x1], nice=False),
+    xscale = alt.Scale(domain=[x0, x1], nice=False, zero=False)
+    x = alt.X("i:Q", scale=xscale,
               axis=alt.Axis(title=None, labelExpr=label_expr, labelAngle=-45, tickMinStep=1,
                             grid=False, values=list(range(start, len(full), max(1, len(d) // 10)))))
     color = alt.condition("datum.up", alt.value(UP), alt.value(DOWN))
@@ -63,19 +64,19 @@ def build_algo_chart(result: dict, window: int = ALGO_CHART_WINDOW, height: int 
     band = alt.Chart(pd.DataFrame({"x0": [int(d["i"][d["is_breakout"]].iloc[0])], "x1": [x1],
                                    "lo": [mid * (1 - tol)], "hi": [mid * (1 + tol)]})
                      ).mark_rect(color=AMBER, opacity=0.18).encode(
-        x=alt.X("x0:Q"), x2="x1:Q", y=alt.Y("lo:Q", scale=yscale), y2="hi:Q")
+        x=alt.X("x0:Q", scale=xscale), x2="x1:Q", y=alt.Y("lo:Q", scale=yscale), y2="hi:Q")
 
     def hline(val, label, col, dash, xpos, align="left", dy=-6):
         df = pd.DataFrame({"v": [val], "label": [label], "x": [xpos]})
         r = alt.Chart(df).mark_rule(color=col, strokeDash=dash, strokeWidth=1.2).encode(y=alt.Y("v:Q", scale=yscale))
         t = alt.Chart(df).mark_text(align=align, dx=4 if align == "left" else -4, dy=dy, fontSize=11, color=col).encode(
-            x=alt.X("x:Q"), y=alt.Y("v:Q", scale=yscale), text="label:N")
+            x=alt.X("x:Q", scale=xscale), y=alt.Y("v:Q", scale=yscale), text="label:N")
         return r + t
 
     b_i = int(result["b_index"])
     layers = [
         band, hl, wick, body,
-        hline(mid, f"Midpoint {mid:,.2f}", AMBER, [], x0 + 1, dy=12),
+        hline(mid, f"Midpoint {mid:,.2f}", AMBER, [], x0 + 1, dy=-6),
         hline(hi, f"Breakout high {hi:,.2f}", BLUE, [4, 3], x0 + 1),
         hline(result["prev_high"], f"Prev {ALGO_PRICE_LOOKBACK}-high {result['prev_high']:,.2f}", GREY, [2, 3], x0 + 1, dy=12),
         hline(result["max_price_after"], f"Peak after {result['max_price_after']:,.2f}", GREY, [6, 3], x0 + 1),

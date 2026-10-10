@@ -351,6 +351,11 @@ click-to-sort — no separate sort control needed.
 
 def render_algo_explainer():
     st.markdown(f"""
+**Inspiration for this tool:**
+- [youtube.com/watch?v=M2SO-du5PVc&t=122s](https://www.youtube.com/watch?v=M2SO-du5PVc&t=122s)
+
+---
+
 ## Purpose
 
 Finds stocks that made a **high-volume breakout** and have since come back to
@@ -383,7 +388,7 @@ recommendation.
 - Dates shown as DD-MM-YYYY, times in IST.
 - Fetched data is cached for the day (Nifty 500 / Nifty 100); it refreshes
   after market close. Custom tickers always fetch fresh.
-- Live ticks are not enabled — results reflect the last completed candle.
+- Results reflect the last completed candle.
 - A setup is **not** invalidated if price closes below the breakout candle's
   low; check the chart before acting.
 """)
