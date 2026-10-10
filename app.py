@@ -10,7 +10,7 @@ switching between sidebar pages.
 
 "How this works" is no longer a separate sidebar page (it was, for the
 Signal Screener, before this change) — it's now a tab inside each
-screener page, via st.tabs(). Sidebar nav is 2 entries, not 3. See
+screener page, via st.tabs(). Sidebar nav is 3 entries (Signal, Momentum, Algo Signals). See
 how_it_works.py and each page file's docstring for why.
 """
 import streamlit as st
@@ -20,5 +20,6 @@ st.set_page_config(page_title="Signal Screener", layout="wide")
 if __name__ == "__main__":
     signal_page = st.Page("pages/0_Signal_Screener.py", title="Signal Screener", icon="\U0001F4C8", default=True)
     momentum_page = st.Page("pages/1_Momentum_Screener.py", title="Momentum Screener", icon="\U0001F4C8")
-    pg = st.navigation([signal_page, momentum_page])
+    algo_page = st.Page("pages/2_Algo_Signals.py", title="Algo Signals", icon="\U0001F4C9")
+    pg = st.navigation([signal_page, momentum_page, algo_page])
     pg.run()

@@ -713,3 +713,17 @@ MOMENTUM_RISK_FREE_RATE_PCT = 5.25                  # proxy: India ~91-day T-bil
                                                      # set as of the date below. Manually-refreshed constant,
                                                      # same pattern as the NSE master data — not a live fetch.
 MOMENTUM_RISK_FREE_RATE_ASOF = "10-Sep-2026"        # update both this and the rate above when refreshed
+
+
+# ---------------------------------------------------------------------------
+# Algo Signals — high-volume breakout + retest of the breakout-candle midpoint
+# ---------------------------------------------------------------------------
+ALGO_VOLUME_LOOKBACK = 20          # candles averaged for the volume baseline
+ALGO_VOLUME_MULTIPLIER = 3.0       # breakout volume must be >= this x the baseline
+ALGO_PRICE_LOOKBACK = 20           # breakout close must exceed the high of this many prior candles
+ALGO_MAX_BREAKOUT_AGE = 20         # inclusive; a breakout 21 candles old has expired
+ALGO_MIDPOINT_TOLERANCE_PCT = 1.0  # current price must be within +/- this % of the midpoint
+ALGO_MIN_CANDLES = 25              # fewer completed candles than this -> stock skipped
+ALGO_FETCH_PERIOD = "8mo"          # ample history for 25 + 20 + 20 candles
+ALGO_CANDLE_FINAL_HOUR_IST = 16    # a candle dated "today" is treated as incomplete before 16:00 IST
+ALGO_CHART_WINDOW = 60             # candles shown in the drill-down chart

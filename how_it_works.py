@@ -24,6 +24,8 @@ from config import (
     MOMENTUM_RISK_FREE_RATE_PCT,
     MOMENTUM_RISK_FREE_RATE_ASOF,
     MAX_CUSTOM_TICKERS,
+    ALGO_VOLUME_LOOKBACK, ALGO_VOLUME_MULTIPLIER, ALGO_PRICE_LOOKBACK,
+    ALGO_MAX_BREAKOUT_AGE, ALGO_MIDPOINT_TOLERANCE_PCT, ALGO_MIN_CANDLES,
 )
 
 
@@ -344,4 +346,44 @@ click-to-sort — no separate sort control needed.
     - Daily consolidated surveillance file (all flags, not just ASM/GSM): [nseindia.com/all-reports](https://www.nseindia.com/all-reports)
 - No portfolio construction, position sizing, or trade execution — this
   is a ranking table, not a strategy.
+""")
+
+
+def render_algo_explainer():
+    st.markdown(f"""
+## Purpose
+
+Finds stocks that made a **high-volume breakout** and have since come back to
+**retest the middle of the breakout candle**. Daily candles from Yahoo
+Finance, **adjusted** for splits/dividends. Informational only — not a
+recommendation.
+
+## What counts as a breakout candle
+
+- Green candle (close above open).
+- Volume at least **{ALGO_VOLUME_MULTIPLIER:g}x** the average volume of the previous
+  {ALGO_VOLUME_LOOKBACK} candles.
+- Close above the highest high of the previous {ALGO_PRICE_LOOKBACK} candles.
+
+## What counts as a retest
+
+- Only the **newest** breakout candle in the last {ALGO_MAX_BREAKOUT_AGE} candles is considered.
+  If it doesn't qualify, older breakouts are **not** checked.
+- Price must have made a **higher high** than the breakout candle's high
+  after the breakout.
+- Latest close is within **{ALGO_MIDPOINT_TOLERANCE_PCT:g}%** (either side) of the breakout candle's
+  midpoint, (high + low) / 2.
+- A setup is valid for {ALGO_MAX_BREAKOUT_AGE} candles after the breakout and expires on the next one.
+- Stocks with fewer than {ALGO_MIN_CANDLES} completed candles are skipped.
+
+## Data and refresh
+
+- Only **completed** candles are used: today's candle is ignored until
+  16:00 IST.
+- Dates shown as DD-MM-YYYY, times in IST.
+- Fetched data is cached for the day (Nifty 500 / Nifty 100); it refreshes
+  after market close. Custom tickers always fetch fresh.
+- Live ticks are not enabled — results reflect the last completed candle.
+- A setup is **not** invalidated if price closes below the breakout candle's
+  low; check the chart before acting.
 """)
