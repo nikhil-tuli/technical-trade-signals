@@ -83,4 +83,3 @@ For education and research only. Not investment advice. Do your own analysis bef
 ## More
 
 - Signal Screener design rules: [`signal_screener_requirements_v2.md`](signal_screener_requirements_v2.md)
-- Earlier build notes and bug log: [`BUILD_STATUS.md`](BUILD_STATUS.md)
